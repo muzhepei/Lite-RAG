@@ -1,0 +1,9 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+local_test.env
+examples/three_kingdoms_ext/out/**
+*.kv
+.DS_Store

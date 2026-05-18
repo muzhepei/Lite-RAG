@@ -1,0 +1,53 @@
+// es2vec 混合检索 gRPC API
+// gRPC Python: https://grpc.io/docs/languages/python/
+syntax = "proto3";
+
+package es2vec.v1;
+
+option py_generic_services = true;
+
+// 混合检索服务
+service SearchService {
+  // 执行全文 + 向量混合检索
+  rpc HybridSearch(HybridSearchRequest) returns (HybridSearchResponse);
+  // 健康检查
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message HybridSearchRequest {
+  string query = 1;
+  string index = 2;
+  int32 k = 3;
+  string match_field = 4;
+  optional bool use_rrf = 5;
+  optional double vector_weight = 6;
+  optional double keyword_weight = 7;
+  optional double kw_sat = 8;
+  // raw | saturation | log1p
+  optional string keyword_norm_mode = 9;
+  optional bool name_rerank = 10;
+}
+
+message SearchHit {
+  int32 rank = 1;
+  string id = 2;
+  double score = 3;
+  string text = 4;
+  bool text_truncated = 5;
+  optional string chapter_id = 6;
+  optional int32 chunk_index = 7;
+}
+
+message HybridSearchResponse {
+  string query = 1;
+  string index = 2;
+  int32 total = 3;
+  int32 returned = 4;
+  repeated SearchHit hits = 5;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}

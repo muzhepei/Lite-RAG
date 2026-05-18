@@ -1,0 +1,104 @@
+# es2vec + Elasticsearch 8（单机开发）
+# 构建：docker compose build
+# 启动 ES：docker compose up -d elasticsearch
+# 启动 Web / gRPC（常驻）：docker compose up -d web grpc
+# 测 ES：docker compose run --rm es2vec python scripts/docker_check_es.py
+# 离线冒烟：docker compose run --rm es2vec python cli/smoke_demo.py --offline
+# 章级索引：docker compose run --rm es2vec python cli/index_corpus.py --input examples/data/three_kingdoms_by_chapter.jsonl --index es2vec_corpus --recreate
+# chunk 索引：先 chunk_corpus.py，再 index_corpus.py --index es2vec_corpus_chunks --chunk-fields --recreate
+
+x-es2vec-base: &es2vec-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  depends_on:
+    elasticsearch:
+      condition: service_healthy
+  environment:
+    ES_HOST: http://elasticsearch:9200
+    ES_USER: elastic
+    ES_PASSWORD: ${ELASTIC_PASSWORD:-es2vec_dev}
+    ES_VERIFY_CERTS: "false"
+    ES2VEC_HF_LOCAL_FILES_ONLY: "0"
+  volumes:
+    - hf_cache:/root/.cache/huggingface
+  working_dir: /opt/es2vec
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: es2vec-elasticsearch
+    environment:
+      node.name: es2vec-es
+      cluster.name: es2vec-docker
+      discovery.type: single-node
+      bootstrap.memory_lock: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      xpack.security.enabled: "true"
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-es2vec_dev}
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+    ports:
+      # 宿主机 9200 常被本地 ES 占用，默认映射到 9201
+      - "9201:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fs -u elastic:${ELASTIC_PASSWORD:-es2vec_dev} http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  es2vec:
+    <<: *es2vec-base
+    container_name: es2vec-app
+
+  web:
+    <<: *es2vec-base
+    container_name: es2vec-web
+    restart: unless-stopped
+    ports:
+      - "${ES2VEC_WEB_PORT:-8765}:8765"
+    environment:
+      ES_HOST: http://elasticsearch:9200
+      ES_USER: elastic
+      ES_PASSWORD: ${ELASTIC_PASSWORD:-es2vec_dev}
+      ES_VERIFY_CERTS: "false"
+      ES2VEC_HF_LOCAL_FILES_ONLY: "0"
+      ES2VEC_WEB_HOST: "0.0.0.0"
+      ES2VEC_WEB_PORT: "8765"
+      ES2VEC_INDEX: ${ES2VEC_INDEX:-es2vec_corpus_chunks}
+    command: ["python", "apps/web_search_server.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8765/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  grpc:
+    <<: *es2vec-base
+    container_name: es2vec-grpc
+    restart: unless-stopped
+    ports:
+      - "${ES2VEC_GRPC_PORT:-50051}:50051"
+    environment:
+      ES_HOST: http://elasticsearch:9200
+      ES_USER: elastic
+      ES_PASSWORD: ${ELASTIC_PASSWORD:-es2vec_dev}
+      ES_VERIFY_CERTS: "false"
+      ES2VEC_HF_LOCAL_FILES_ONLY: "0"
+      ES2VEC_GRPC_HOST: "0.0.0.0"
+      ES2VEC_GRPC_PORT: "50051"
+      ES2VEC_INDEX: ${ES2VEC_INDEX:-es2vec_corpus_chunks}
+    command: ["python", "apps/grpc_search_server.py"]
+
+volumes:
+  es_data:
+  hf_cache:
+

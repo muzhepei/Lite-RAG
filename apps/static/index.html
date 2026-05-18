@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>三国演义 · 混合检索</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #c45c26;
+      --accent-hover: #e07a3a;
+      --score: #6ee7b7;
+      --error: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(ellipse 80% 50% at 50% -20%, #4a1c1c 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    header { margin-bottom: 2rem; }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin: 0;
+    }
+    .search-box {
+      display: flex;
+      gap: 0.65rem;
+      margin-bottom: 1.5rem;
+    }
+    #query {
+      flex: 1;
+      padding: 0.85rem 1rem;
+      font-size: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    #query:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(196, 92, 38, 0.28);
+    }
+    #query::placeholder { color: var(--muted); }
+    button {
+      padding: 0.85rem 1.35rem;
+      font-size: 1rem;
+      font-weight: 500;
+      border: none;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .meta {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      min-height: 1.4em;
+    }
+    .meta strong { color: var(--text); }
+    .error {
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      background: rgba(248, 113, 113, 0.12);
+      border: 1px solid rgba(248, 113, 113, 0.35);
+      color: var(--error);
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .error.visible { display: block; }
+    .results { list-style: none; padding: 0; margin: 0; }
+    .hit {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+      margin-bottom: 0.85rem;
+    }
+    .hit-head {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      margin-bottom: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .rank {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      background: var(--bg);
+      padding: 0.15rem 0.5rem;
+      border-radius: 6px;
+    }
+    .score {
+      font-size: 0.85rem;
+      color: var(--score);
+      font-variant-numeric: tabular-nums;
+    }
+    .doc-id {
+      font-size: 0.75rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .hit-text {
+      margin: 0;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 2.5rem 1rem;
+    }
+    .loading .results { opacity: 0.5; pointer-events: none; }
+    .hints {
+      margin: -0.5rem 0 1.25rem;
+    }
+    .hint-group {
+      margin-bottom: 0.85rem;
+    }
+    .hint-group:last-child {
+      margin-bottom: 0;
+    }
+    .hint-label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.45rem;
+    }
+    .hint-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .hint-btn {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .hint-btn:hover {
+      color: var(--text);
+      border-color: var(--accent);
+      background: rgba(196, 92, 38, 0.12);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>三国演义 · 混合检索</h1>
+      <p class="sub">在《三国演义》语料中检索经典人物、典故与名场面 · 全文 + 向量混合搜索</p>
+    </header>
+
+    <form class="search-box" id="searchForm" role="search">
+      <input
+        type="search"
+        id="query"
+        name="q"
+        placeholder="输入人物或典故，如：诸葛亮、温酒斩华雄、三顾茅庐"
+        autocomplete="off"
+        required
+      />
+      <button type="submit" id="btnSearch">检索</button>
+    </form>
+
+    <div class="hints" id="hints" aria-label="人物与典故快速检索">
+      <div class="hint-group">
+        <span class="hint-label">人物</span>
+        <div class="hint-row">
+          <button type="button" class="hint-btn" data-q="刘备">刘备</button>
+          <button type="button" class="hint-btn" data-q="关羽">关羽</button>
+          <button type="button" class="hint-btn" data-q="张飞">张飞</button>
+          <button type="button" class="hint-btn" data-q="诸葛亮">诸葛亮</button>
+          <button type="button" class="hint-btn" data-q="曹操">曹操</button>
+          <button type="button" class="hint-btn" data-q="周瑜">周瑜</button>
+          <button type="button" class="hint-btn" data-q="赵云">赵云</button>
+          <button type="button" class="hint-btn" data-q="吕布">吕布</button>
+        </div>
+      </div>
+      <div class="hint-group">
+        <span class="hint-label">典故</span>
+        <div class="hint-row">
+          <button type="button" class="hint-btn" data-q="温酒斩华雄">温酒斩华雄</button>
+          <button type="button" class="hint-btn" data-q="三顾茅庐">三顾茅庐</button>
+          <button type="button" class="hint-btn" data-q="草船借箭">草船借箭</button>
+          <button type="button" class="hint-btn" data-q="赤壁之战">赤壁之战</button>
+          <button type="button" class="hint-btn" data-q="空城计">空城计</button>
+          <button type="button" class="hint-btn" data-q="单刀赴会">单刀赴会</button>
+          <button type="button" class="hint-btn" data-q="长坂坡">长坂坡</button>
+          <button type="button" class="hint-btn" data-q="张辽威震逍遥津">张辽威震逍遥津</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="error" id="errorBox" role="alert"></div>
+    <p class="meta" id="meta" aria-live="polite"></p>
+    <ul class="results" id="results"></ul>
+  </div>
+
+  <script>
+    const form = document.getElementById("searchForm");
+    const input = document.getElementById("query");
+    const btn = document.getElementById("btnSearch");
+    const meta = document.getElementById("meta");
+    const resultsEl = document.getElementById("results");
+    const errorBox = document.getElementById("errorBox");
+    const wrap = document.querySelector(".wrap");
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.classList.add("visible");
+    }
+
+    function hideError() {
+      errorBox.textContent = "";
+      errorBox.classList.remove("visible");
+    }
+
+    function formatScore(score) {
+      if (score == null || Number.isNaN(Number(score))) return "—";
+      return Number(score).toFixed(4);
+    }
+
+    function renderHits(data) {
+      const hits = data.hits || [];
+      if (hits.length === 0) {
+        resultsEl.innerHTML =
+          '<li class="empty">演义中未找到相关段落，可换人物名、典故或名场面再试。</li>';
+        return;
+      }
+      resultsEl.innerHTML = hits
+        .map((h) => {
+          const extra = [];
+          if (h.chapter_id != null) extra.push(`章节 ${h.chapter_id}`);
+          if (h.chunk_index != null) extra.push(`片段 ${h.chunk_index}`);
+          const extraHtml = extra.length
+            ? `<span class="doc-id">${extra.join(" · ")}</span>`
+            : "";
+          const idHtml = h.id
+            ? `<span class="doc-id">${escapeHtml(String(h.id))}</span>`
+            : "";
+          const trunc = h.text_truncated ? "（正文已截断）" : "";
+          return `
+            <li class="hit">
+              <div class="hit-head">
+                <span class="rank">#${h.rank}</span>
+                <span class="score">相关度 ${formatScore(h.score)}</span>
+                ${extraHtml}
+                ${idHtml}
+              </div>
+              <p class="hit-text">${escapeHtml(h.text || "")}${trunc}</p>
+            </li>`;
+        })
+        .join("");
+    }
+
+    function escapeHtml(s) {
+      return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function doSearch(q) {
+      hideError();
+      wrap.classList.add("loading");
+      btn.disabled = true;
+      meta.textContent = "检索中…";
+      resultsEl.innerHTML = "";
+
+      const params = new URLSearchParams({ q, k: "10" });
+      try {
+        const res = await fetch(`/api/search?${params}`);
+        const data = await res.json();
+        if (!res.ok) {
+          const detail = data.detail;
+          const msg =
+            typeof detail === "string"
+              ? detail
+              : Array.isArray(detail)
+                ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+                : "检索失败";
+          throw new Error(msg);
+        }
+        meta.innerHTML =
+          `《三国演义》检索「<strong>${escapeHtml(data.query)}</strong>」` +
+          ` · 返回 <strong>${data.returned}</strong> 段（约 ${data.total} 条相关）`;
+        renderHits(data);
+      } catch (err) {
+        showError(err.message || "网络错误，请稍后重试");
+        meta.textContent = "";
+      } finally {
+        wrap.classList.remove("loading");
+        btn.disabled = false;
+      }
+    }
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (!q) return;
+      doSearch(q);
+    });
+
+    document.getElementById("hints").addEventListener("click", (e) => {
+      const btn = e.target.closest(".hint-btn");
+      if (!btn) return;
+      const q = btn.getAttribute("data-q");
+      if (!q) return;
+      input.value = q;
+      doSearch(q);
+    });
+
+    const initialQ = new URLSearchParams(location.search).get("q");
+    if (initialQ) {
+      input.value = initialQ;
+      doSearch(initialQ.trim());
+    }
+  </script>
+</body>
+</html>

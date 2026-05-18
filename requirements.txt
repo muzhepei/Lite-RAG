@@ -1,0 +1,15 @@
+elasticsearch>=8.13,<9
+openai>=1.0.0
+# >=2.3 起不再依赖 huggingface_hub.cached_download（与新版本 huggingface_hub 兼容）
+sentence-transformers>=2.7.0
+torch>=2.2.0
+jieba>=0.42.1
+huggingface_hub>=0.20.0
+gensim>=4.3.0
+# Web 检索页面（apps/web_search_server.py）
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+# gRPC 检索服务（apps/grpc_search_server.py）
+grpcio>=1.60.0
+# 仅开发时生成 stub：python scripts/gen_grpc.py
+grpcio-tools>=1.60.0

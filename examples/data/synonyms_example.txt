@@ -1,0 +1,4 @@
+# 示例：等价同义词（逗号分隔）。上传： python es2vec/put_synonyms_set.py --set-id es2vec_cn --file es2vec/synonyms_example.txt
+孔明, 诸葛亮
+玄德, 刘备
+孟德, 曹操
