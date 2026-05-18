@@ -158,6 +158,29 @@ curl -X POST http://127.0.0.1:8765/api/v1/rag `
 
 **前置条件**：已安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Windows）或 Docker Engine + Compose。首次构建会下载 PyTorch；首次索引会下载向量模型（缓存于 `hf_cache` 卷）。
 
+### 云服务器 / ECS 部署
+
+1. 复制环境模板并修改（密码、可选 RAG API Key 等）：
+
+```bash
+cp .env.example .env
+# 编辑 .env：至少修改 ELASTIC_PASSWORD；启用 RAG 时填写 DASHSCOPE_API_KEY 等
+```
+
+2. Linux 宿主机建议设置 ES 所需内核参数：`sysctl -w vm.max_map_count=262144`（写入 `/etc/sysctl.conf` 持久化）。
+
+3. 构建并启动（需先 [建索引](#索引与检索) 后 Web 才有检索结果）：
+
+```bash
+docker compose build
+docker compose up -d elasticsearch web grpc
+docker compose run --rm es2vec python scripts/docker_check_es.py
+```
+
+4. **安全组**：公网建议仅放行 `ES2VEC_WEB_PORT`（默认 8765）；**不要**对公网开放 9200（ES）。Web/gRPC **无鉴权**，生产请前置 HTTPS 与认证网关。
+
+> 容器内变量由 `docker-compose.yml` 的 `environment` + 项目根 `.env`（`env_file`）注入；**不要**指望 `local_test.env` 进入镜像（见 `.dockerignore`）。本机 `python cli/...` 连 compose ES 仍用 `local_test.env.docker.example`。
+
 ### 服务与端口
 
 | 服务 | 容器名 | 说明 |
@@ -313,7 +336,7 @@ copy local_test.env.docker.example local_test.env
 
 | 现象 | 处理 |
 |------|------|
-| 端口占用（9200 / 8765） | `netstat -ano \| findstr 9200`；或改 `docker-compose.yml` 端口并同步 `local_test.env.docker.example` |
+| 端口占用（9200 / 8765） | 改 `.env` 中 `ES2VEC_WEB_PORT` 等后 `docker compose up -d`；或改 `docker-compose.yml` |
 | ES 长时间不健康 | `docker compose logs elasticsearch`；增大 Docker Desktop 内存 |
 | 客户端 400 `media_type` | 确认 `requirements.txt` 中 `elasticsearch` 为 `>=8.13,<9`，然后 `docker compose build --no-cache es2vec` |
 
@@ -325,7 +348,8 @@ copy local_test.env.docker.example local_test.env
 | `docker-compose.yml` | `elasticsearch` / `es2vec` / `web` 编排 |
 | `.dockerignore` | 构建上下文排除项 |
 | `scripts/docker_check_es.py` | ES 连通性检查 |
-| `local_test.env.docker.example` | 宿主机连 compose ES 的 env 模板 |
+| `.env.example` | Docker Compose / ECS：复制为 `.env` 后 `docker compose up` |
+| `local_test.env.docker.example` | 宿主机 Python 连 compose ES（非容器内） |
 
 ---
 
@@ -343,6 +367,7 @@ es2vec/                   # 项目根 = Python 包根
 │   └── three_kingdoms_ext/   # 三国演义扩展实验（可选 Gensim）
 ├── Dockerfile
 ├── docker-compose.yml
+├── .env.example
 ├── DOCKER.md
 ├── local_test.env.example
 ├── local_test.env.docker.example

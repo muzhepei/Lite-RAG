@@ -1,4 +1,5 @@
-# es2vec + Elasticsearch 8（单机开发）
+# es2vec + Elasticsearch 8（单机 / ECS）
+# 配置：cp .env.example .env 后编辑（见 README「云服务器部署」）
 # 构建：docker compose build
 # 启动 ES：docker compose up -d elasticsearch
 # 启动 Web / gRPC（常驻）：docker compose up -d web grpc
@@ -11,6 +12,9 @@ x-es2vec-base: &es2vec-base
   build:
     context: .
     dockerfile: Dockerfile
+  env_file:
+    - path: .env
+      required: false
   depends_on:
     elasticsearch:
       condition: service_healthy

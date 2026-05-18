@@ -8,6 +8,7 @@
 
 - 已安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Windows）或 Docker Engine + Compose
 - 磁盘空间：ES 镜像约 600MB；首次构建 es2vec 镜像会下载 PyTorch 等依赖；首次索引会下载向量模型（写入 `hf_cache` 卷）
+- **ECS / Linux 服务器**：`cp .env.example .env` 并编辑后启动；`sysctl -w vm.max_map_count=262144`（详见 [README — 云服务器部署](README.md#云服务器--ecs-部署)）
 
 ## 服务说明
 
@@ -231,7 +232,8 @@ docker compose build --no-cache es2vec
 | `docker-compose.yml` | ES + es2vec 服务编排 |
 | `.dockerignore` | 构建上下文排除项 |
 | `scripts/docker_check_es.py` | ES 连通性检查脚本 |
-| `local_test.env.docker.example` | 宿主机连 Docker ES 的 env 模板 |
+| `.env.example` | Compose 部署模板（复制为 `.env`，含密码、RAG Key、端口等） |
+| `local_test.env.docker.example` | 宿主机 Python 连 Docker ES（非容器内） |
 | `apps/web_search_server.py` | Web 混合检索（FastAPI，默认 8765） |
 | `apps/grpc_search_server.py` | gRPC 混合检索（默认 50051） |
 | `proto/es2vec_search.proto` | gRPC 接口定义 |
