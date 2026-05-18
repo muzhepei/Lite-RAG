@@ -169,12 +169,10 @@ curl -X POST http://127.0.0.1:8765/api/v1/rag `
 
 | 项 | 容器内 | 宿主机（默认） |
 |----|--------|----------------|
-| ES HTTP | `http://elasticsearch:9200` | `http://localhost:9201` |
+| ES HTTP | `http://elasticsearch:9200` | `http://localhost:9200` |
 | Web 检索 | `http://0.0.0.0:8765` | `http://localhost:8765` |
 | gRPC 检索 | `0.0.0.0:50051` | `localhost:50051` |
 | 用户 / 密码 | `elastic` / `es2vec_dev` | 同左（`ELASTIC_PASSWORD` 可覆盖） |
-
-> ES 映射 **9201** 而非 9200，避免与本机已有 Elasticsearch 冲突。
 
 ### 快速开始（Docker）
 
@@ -303,7 +301,7 @@ docker compose up -d elasticsearch
 
 ```powershell
 copy local_test.env.docker.example local_test.env
-# ES_HOST=http://localhost:9201，ES_PASSWORD 与 ELASTIC_PASSWORD 一致
+# ES_HOST=http://localhost:9200，ES_PASSWORD 与 ELASTIC_PASSWORD 一致
 ```
 
 ### 数据卷与故障排查
@@ -315,7 +313,7 @@ copy local_test.env.docker.example local_test.env
 
 | 现象 | 处理 |
 |------|------|
-| 端口占用（9201 / 8765） | `netstat -ano \| findstr 9201`；或改 `docker-compose.yml` 端口并同步 `local_test.env.docker.example` |
+| 端口占用（9200 / 8765） | `netstat -ano \| findstr 9200`；或改 `docker-compose.yml` 端口并同步 `local_test.env.docker.example` |
 | ES 长时间不健康 | `docker compose logs elasticsearch`；增大 Docker Desktop 内存 |
 | 客户端 400 `media_type` | 确认 `requirements.txt` 中 `elasticsearch` 为 `>=8.13,<9`，然后 `docker compose build --no-cache es2vec` |
 
@@ -373,7 +371,7 @@ es2vec/                   # 项目根 = Python 包根
 | `Dockerfile` / `docker-compose.yml` | Docker 镜像与 ES + CLI + Web 编排 |
 | `DOCKER.md` | Docker 专题说明（与 README [Docker 部署](#docker-部署) 同步） |
 | `local_test.env.example` | 本机 ES / 模型 / API Key 配置模板 |
-| `local_test.env.docker.example` | 宿主机 Python 连接 compose ES（`localhost:9201`） |
+| `local_test.env.docker.example` | 宿主机 Python 连接 compose ES（`localhost:9200`） |
 | `local_test.env` | 实际本地配置（勿提交） |
 | `pyrightconfig.json` | Pylance：`extraPaths` 含上级目录，用于解析 `import es2vec` |
 

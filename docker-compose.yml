@@ -39,8 +39,7 @@ services:
       xpack.security.http.ssl.enabled: "false"
       xpack.security.transport.ssl.enabled: "false"
     ports:
-      # 宿主机 9200 常被本地 ES 占用，默认映射到 9201
-      - "9201:9200"
+      - "9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:

@@ -22,13 +22,11 @@
 
 | 项 | 容器内 | 宿主机 |
 |----|--------|--------|
-| ES HTTP | `http://elasticsearch:9200` | `http://localhost:9201` |
+| ES HTTP | `http://elasticsearch:9200` | `http://localhost:9200` |
 | Web 检索 | `http://0.0.0.0:8765` | `http://localhost:8765` |
 | gRPC 检索 | `0.0.0.0:50051` | `localhost:50051` |
 | 用户 | `elastic` | 同左 |
 | 密码 | `es2vec_dev` | 同左（可用 `ELASTIC_PASSWORD` 覆盖） |
-
-> 宿主机映射为 **9201** 而非 9200，避免与本机已运行的 Elasticsearch 冲突。
 
 ## 快速开始
 
@@ -187,7 +185,7 @@ copy local_test.env.docker.example local_test.env
 # 编辑 ES_PASSWORD，与 ELASTIC_PASSWORD 一致
 ```
 
-`local_test.env.docker.example` 中 `ES_HOST=http://localhost:9201` 指向 compose 映射端口。
+`local_test.env.docker.example` 中 `ES_HOST=http://localhost:9200` 指向 compose 映射端口。
 
 ## 数据卷
 
@@ -204,7 +202,7 @@ copy local_test.env.docker.example local_test.env
 
 若启动报错 `bind: Only one usage of each socket address`：
 
-- 检查 `9201` 是否被占用：`netstat -ano | findstr 9201`
+- 检查 `9200` 是否被占用：`netstat -ano | findstr 9200`
 - 或在 `docker-compose.yml` 中修改 `ports` 为 `"9202:9200"`，并同步修改 `local_test.env.docker.example` 中的 `ES_HOST`
 
 ### ES 未就绪
