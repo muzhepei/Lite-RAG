@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>三国演义 · 混合检索</title>
+  <title>三国演义 · 检索与 RAG</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -177,14 +177,67 @@
       border-color: var(--accent);
       background: rgba(196, 92, 38, 0.12);
     }
+    .mode-bar {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .mode-btn {
+      padding: 0.45rem 1rem;
+      font-size: 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .mode-btn.active {
+      color: #fff;
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+    .answer-box {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.1rem 1.2rem;
+      margin-bottom: 1.25rem;
+    }
+    .answer-box.visible { display: block; }
+    .answer-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 0 0 0.6rem;
+    }
+    .answer-text {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 1rem;
+      line-height: 1.65;
+    }
+    .sources-mini {
+      margin-top: 0.85rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h1>三国演义 · 混合检索</h1>
-      <p class="sub">在《三国演义》语料中检索经典人物、典故与名场面 · 全文 + 向量混合搜索</p>
+      <h1>三国演义 · 检索与 RAG</h1>
+      <p class="sub">混合检索片段，或由大模型根据语料生成回答（需服务端配置 API Key）</p>
     </header>
+
+    <div class="mode-bar" role="tablist" aria-label="检索模式">
+      <button type="button" class="mode-btn active" id="modeSearch" data-mode="search">仅检索</button>
+      <button type="button" class="mode-btn" id="modeRag" data-mode="rag">RAG 问答</button>
+    </div>
 
     <form class="search-box" id="searchForm" role="search">
       <input
@@ -197,6 +250,12 @@
       />
       <button type="submit" id="btnSearch">检索</button>
     </form>
+
+    <div class="answer-box" id="answerBox" aria-live="polite">
+      <p class="answer-title">RAG 回答</p>
+      <p class="answer-text" id="answerText"></p>
+      <p class="sources-mini" id="sourcesMini"></p>
+    </div>
 
     <div class="hints" id="hints" aria-label="人物与典故快速检索">
       <div class="hint-group">
@@ -240,6 +299,33 @@
     const resultsEl = document.getElementById("results");
     const errorBox = document.getElementById("errorBox");
     const wrap = document.querySelector(".wrap");
+    const answerBox = document.getElementById("answerBox");
+    const answerText = document.getElementById("answerText");
+    const sourcesMini = document.getElementById("sourcesMini");
+    const modeSearch = document.getElementById("modeSearch");
+    const modeRag = document.getElementById("modeRag");
+
+    let currentMode = "search";
+
+    function setMode(mode) {
+      currentMode = mode;
+      const isRag = mode === "rag";
+      modeSearch.classList.toggle("active", !isRag);
+      modeRag.classList.toggle("active", isRag);
+      btn.textContent = isRag ? "问答" : "检索";
+      input.placeholder = isRag
+        ? "输入问题，如：草船借箭是谁出的计？"
+        : "输入人物或典故，如：诸葛亮、温酒斩华雄、三顾茅庐";
+      if (!isRag) {
+        answerBox.classList.remove("visible");
+      }
+    }
+
+    document.querySelector(".mode-bar").addEventListener("click", (e) => {
+      const b = e.target.closest(".mode-btn");
+      if (!b) return;
+      setMode(b.getAttribute("data-mode") || "search");
+    });
 
     function showError(msg) {
       errorBox.textContent = msg;
@@ -297,34 +383,67 @@
         .replace(/"/g, "&quot;");
     }
 
+    function parseApiError(data) {
+      const detail = data.detail;
+      if (typeof detail === "string") return detail;
+      if (Array.isArray(detail)) {
+        return detail.map((d) => d.msg || JSON.stringify(d)).join("; ");
+      }
+      return "请求失败";
+    }
+
     async function doSearch(q) {
       hideError();
       wrap.classList.add("loading");
       btn.disabled = true;
-      meta.textContent = "检索中…";
+      meta.textContent = currentMode === "rag" ? "检索并生成中…" : "检索中…";
       resultsEl.innerHTML = "";
+      if (currentMode !== "rag") {
+        answerBox.classList.remove("visible");
+      }
 
-      const params = new URLSearchParams({ q, k: "10" });
       try {
-        const res = await fetch(`/api/search?${params}`);
-        const data = await res.json();
-        if (!res.ok) {
-          const detail = data.detail;
-          const msg =
-            typeof detail === "string"
-              ? detail
-              : Array.isArray(detail)
-                ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
-                : "检索失败";
-          throw new Error(msg);
+        if (currentMode === "rag") {
+          const res = await fetch("/api/v1/rag?debug=true", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query: q }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(parseApiError(data));
+
+          answerText.textContent = data.answer || "";
+          const src = data.sources || [];
+          sourcesMini.textContent = src.length
+            ? "引用 " +
+              src.map((s) => `[${s.ref}] ${(s.text_preview || "").slice(0, 40)}…`).join(" · ")
+            : "";
+          answerBox.classList.add("visible");
+
+          meta.innerHTML =
+            `RAG「<strong>${escapeHtml(data.query)}</strong>」` +
+            ` · 模型 <strong>${escapeHtml(data.model || "—")}</strong>` +
+            ` · 检索 <strong>${data.retrieval_returned}</strong> 段`;
+          if (data.retrieval && data.retrieval.hits) {
+            renderHits(data.retrieval);
+          } else {
+            resultsEl.innerHTML =
+              '<li class="empty">回答已生成；可在 OpenAPI /api/v1/rag?debug=1 查看完整检索列表。</li>';
+          }
+        } else {
+          const params = new URLSearchParams({ q, k: "10" });
+          const res = await fetch(`/api/search?${params}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(parseApiError(data));
+          meta.innerHTML =
+            `《三国演义》检索「<strong>${escapeHtml(data.query)}</strong>」` +
+            ` · 返回 <strong>${data.returned}</strong> 段（约 ${data.total} 条相关）`;
+          renderHits(data);
         }
-        meta.innerHTML =
-          `《三国演义》检索「<strong>${escapeHtml(data.query)}</strong>」` +
-          ` · 返回 <strong>${data.returned}</strong> 段（约 ${data.total} 条相关）`;
-        renderHits(data);
       } catch (err) {
         showError(err.message || "网络错误，请稍后重试");
         meta.textContent = "";
+        answerBox.classList.remove("visible");
       } finally {
         wrap.classList.remove("loading");
         btn.disabled = false;

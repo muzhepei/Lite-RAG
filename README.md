@@ -1,7 +1,7 @@
 # es2vec 项目目录说明
 
-Elasticsearch **多语言向量** + **全文 / 向量混合检索**。  
-默认用 `intfloat/multilingual-e5-small`（或 OpenAI 兼容网关 / ES Inference）生成向量，写入 ES 后做 BM25 + kNN 混合检索。
+Elasticsearch **多语言向量** + **全文 / 向量混合检索**，并支持 **RAG 问答**（检索 + OpenAI 兼容对话）。  
+默认用 `intfloat/multilingual-e5-small`（或 OpenAI 兼容网关 / ES Inference）生成向量，写入 ES 后做 BM25 + kNN 混合检索；可选 `POST /api/v1/rag` / `cli/rag_chat.py` 由大模型根据命中片段生成回答。
 
 ## 目录
 
@@ -104,9 +104,10 @@ python apps/web_search_server.py
 
 在浏览器中打开：**http://127.0.0.1:8765/**
 
-- 页面文件：`apps/static/index.html`（混合检索 UI，展示命中片段与得分）
+- 页面文件：`apps/static/index.html`（**仅检索** / **RAG 问答** 两种模式）
 - 健康检查：`http://127.0.0.1:8765/api/health`
 - **对外 REST**（其它系统集成）：`POST /api/v1/search`（JSON）；兼容 `GET /api/search?q=...`；OpenAPI：`/docs`
+- **RAG 问答**：`POST /api/v1/rag`（检索 + LLM 生成）；`GET /api/v1/rag?q=...`；调试加 `?debug=true` 附带原始 `retrieval`
 - **对外 gRPC**：`python apps/grpc_search_server.py`（默认 `50051`），见 [对外集成](#对外集成rest--grpc)
 - 可选环境变量：`ES2VEC_WEB_HOST`（默认 `127.0.0.1`）、`ES2VEC_WEB_PORT`（默认 `8765`）、`ES2VEC_INDEX`（人名检索建议 `es2vec_corpus_chunks`）
 - 混合检索调优（Web 未设时的默认）：`ES2VEC_VEC_WEIGHT=0.85`、`ES2VEC_KW_WEIGHT=0.15`、`ES2VEC_KW_SAT=25`；短人名查询自动密度重排（`ES2VEC_NAME_RERANK_AUTO=1`）
@@ -116,6 +117,38 @@ python apps/web_search_server.py
 ```powershell
 python apps/interactive_search.py --index es2vec_corpus_chunks --no-rrf
 ```
+
+### 5. RAG 问答（检索 + 生成）
+
+在 `local_test.env` 中配置 **对话 API**（与 Embeddings 共用 `DASHSCOPE_API_KEY` 或 `MODELSCOPE_API_KEY`），并设置对话模型，例如：
+
+```env
+DASHSCOPE_API_KEY=你的百炼Key
+ES2VEC_CHAT_MODEL=qwen-turbo
+ES2VEC_INDEX=es2vec_corpus_chunks
+```
+
+命令行单次提问：
+
+```powershell
+python cli/rag_chat.py --q "草船借箭是谁向曹操借的箭？" --index es2vec_corpus_chunks
+```
+
+交互模式（空行退出）：
+
+```powershell
+python cli/rag_chat.py --index es2vec_corpus_chunks
+```
+
+REST 示例：
+
+```powershell
+curl -X POST http://127.0.0.1:8765/api/v1/rag `
+  -H "Content-Type: application/json" `
+  -d "{\"query\": \"三顾茅庐发生在谁家？\", \"top_k\": 3}"
+```
+
+流程：**混合检索 Top-K → 拼参考资料 → OpenAI 兼容 Chat Completions**；实现见 `core/rag_service.py`、`core/openai_compatible_chat.py`。
 
 ---
 
@@ -359,6 +392,9 @@ es2vec/                   # 项目根 = Python 包根
 | `synonym_api.py` | Elasticsearch Synonyms API（8.10+）读写与索引 settings |
 | `search_service.py` | 统一混合检索（`SearchRequest` / `execute_hybrid_search`），供 REST、gRPC 复用 |
 | `search_response.py` | ES 命中格式化为稳定 JSON |
+| `rag_prompt.py` | RAG 参考资料拼装与 system/user 消息 |
+| `openai_compatible_chat.py` | OpenAI 兼容 `/v1/chat/completions` |
+| `rag_service.py` | 完整 RAG（`RagRequest` / `execute_rag`） |
 | `_install_path.py` | 入口脚本 path 引导：`install(__file__)` |
 | `_bootstrap.py` | 路径常量 `PKG_DIR`、`PROJECT_ROOT`（均为包根目录） |
 
@@ -374,6 +410,7 @@ es2vec/                   # 项目根 = Python 包根
 | `bootstrap_inference.py` | 创建 ES 内置 multilingual E5 Inference 端点（**需 Inference 许可**） |
 | `put_synonyms_set.py` | 上传同义词集到 Synonyms API |
 | `smoke_demo.py` | 冒烟：`--offline` 测解析；默认本地建索引+检索；`--inference` 走 ES Inference |
+| `rag_chat.py` | RAG 问答：混合检索 + Chat Completions |
 
 ---
 
@@ -395,7 +432,7 @@ es2vec/                   # 项目根 = Python 包根
 | 脚本 | 功能 |
 |------|------|
 | `interactive_search.py` | 终端循环输入查询 → `hybrid_search` 打印命中 |
-| `web_search_server.py` | Web 搜索页 + REST（`GET /api/search`、`POST /api/v1/search`） |
+| `web_search_server.py` | Web 搜索页 + REST（检索与 `POST /api/v1/rag`） |
 | `grpc_search_server.py` | gRPC 混合检索（`HybridSearch` / `Health`） |
 
 ```powershell
@@ -419,6 +456,8 @@ python apps/grpc_search_server.py
 | `GET /api/search?q=...&index=...&k=...` | 兼容旧版 |
 | `POST /api/v1/search` | **推荐**：JSON Body |
 | `GET /api/v1/search?q=...` | 与 POST 相同参数（Query） |
+| `POST /api/v1/rag` | RAG 问答（JSON；`?debug=true` 附带 `retrieval`） |
+| `GET /api/v1/rag?q=...` | RAG 问答（GET） |
 | `GET /docs` | OpenAPI 文档 |
 
 POST 示例：
@@ -536,6 +575,12 @@ flowchart LR
 | `ES2VEC_NAME_RERANK` | `1` 强制按查询词密度二阶段重排 |
 | `ES2VEC_NAME_RERANK_AUTO` | 默认开启：≤4 字且无空格的查询自动重排 |
 | `ES2VEC_NAME_RERANK_POOL` | 重排候选池，默认 `50` |
+| `ES2VEC_CHAT_MODEL` | RAG 对话模型（`chat/completions`）；魔搭默认 `Qwen/Qwen2.5-7B-Instruct`；仅百炼自动路由时默认 `qwen-turbo` |
+| `ES2VEC_DASHSCOPE_CHAT_MODEL` | 可选；百炼自动路由时覆盖默认对话模型 |
+| `ES2VEC_RAG_TOP_K` | 每次问答检索片段数，默认 `3` |
+| `ES2VEC_RAG_MAX_CONTEXT_CHARS` | 参考资料写入 prompt 的最大字符，超出截断，默认 `12000` |
+| `ES2VEC_RAG_MAX_TOKENS` | 单次生成 `max_tokens`，默认 `1024` |
+| `ES2VEC_CHAT_TEMPERATURE` | 生成温度，越小越稳定，默认 `0.3` |
 
 完整说明见 `core/config.py` 模块文档字符串。
 

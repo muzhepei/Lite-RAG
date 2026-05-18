@@ -32,6 +32,14 @@ es2vec 默认常量。
   ES2VEC_OPENAI_EMBEDDING_MODEL  魔搭默认 ``Qwen/Qwen3-Embedding-8B``；随百炼自动路由时默认 ``text-embedding-v4``
   ES2VEC_EMBEDDING_DIMS   默认 1024；设为 0 表示不在此固定维，改由首次 API 响应推断
 
+  RAG 对话（/api/v1/rag、cli/rag_chat.py；与 Embeddings 共用 ES2VEC_OPENAI_BASE_URL 与 API Key）：
+  ES2VEC_CHAT_MODEL            对话模型 ID（chat/completions，非 embedding）；魔搭默认 Qwen/Qwen2.5-7B-Instruct；仅 DASHSCOPE_API_KEY 且未改网关时默认 qwen-turbo
+  ES2VEC_DASHSCOPE_CHAT_MODEL  可选；百炼自动路由时覆盖默认对话模型（否则用 ES2VEC_CHAT_MODEL 或上述默认）
+  ES2VEC_RAG_TOP_K             每次问答检索 Top-K 片段数，默认 3
+  ES2VEC_RAG_MAX_CONTEXT_CHARS 参考资料写入 prompt 的最大字符，超出截断，默认 12000
+  ES2VEC_RAG_MAX_TOKENS        chat/completions 的 max_tokens，默认 1024
+  ES2VEC_CHAT_TEMPERATURE      生成温度，0 更确定，默认 0.3
+
   访问 Hugging Face 不稳定时（SSL EOF、超时），可在 shell 中设置官方 Hub 变量，例如：
     HF_ENDPOINT=https://hf-mirror.com
   或与 HF_HUB_OFFLINE=1 配合已缓存的模型使用。
@@ -162,6 +170,24 @@ except ValueError:
     _dsb_bs = 10
 DASHSCOPE_EMBEDDING_MAX_BATCH = _dsb_bs if _dsb_bs > 0 else 10
 
+# OpenAI 兼容 Chat（RAG 生成层）
+_DEF_CHAT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+_DEF_DASHSCOPE_CHAT_MODEL = "qwen-turbo"
+
+_chat_model_env_raw = os.environ.get("ES2VEC_CHAT_MODEL")
+_initial_chat_model = (_chat_model_env_raw or _DEF_CHAT_MODEL).strip()
+_chat_model_env_explicit = bool((_chat_model_env_raw or "").strip())
+
+OPENAI_COMPATIBLE_CHAT_MODEL = (
+    (os.environ.get("ES2VEC_DASHSCOPE_CHAT_MODEL") or _DEF_DASHSCOPE_CHAT_MODEL).strip()
+    if (
+        OPENAI_EMBEDDING_ROUTE_AUTO_TO_DASHSCOPE
+        and not _chat_model_env_explicit
+        and _initial_chat_model == _DEF_CHAT_MODEL
+    )
+    else _initial_chat_model
+)
+
 
 def env_flag_true(name: str) -> bool:
     """解析 ES2VEC_JIEBA 等 1/true/on/yes。"""
@@ -208,6 +234,11 @@ WEB_HYBRID_VEC_WEIGHT = 0.85
 WEB_HYBRID_KW_WEIGHT = 0.15
 WEB_HYBRID_KW_SAT = 25.0
 DEFAULT_NAME_RERANK_POOL = 50
+
+RAG_DEFAULT_TOP_K = env_int("ES2VEC_RAG_TOP_K", 3)
+RAG_MAX_CONTEXT_CHARS = env_int("ES2VEC_RAG_MAX_CONTEXT_CHARS", 12000)
+RAG_CHAT_MAX_TOKENS = env_int("ES2VEC_RAG_MAX_TOKENS", 1024)
+RAG_CHAT_TEMPERATURE = env_float("ES2VEC_CHAT_TEMPERATURE", 0.3)
 
 
 def resolve_name_rerank(query: str, explicit: bool | None = None) -> bool:

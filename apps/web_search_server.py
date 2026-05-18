@@ -20,6 +20,11 @@ Web 混合检索服务：提供 REST API 与静态搜索页面。
     ES2VEC_KW_SAT=25
     ES2VEC_NAME_RERANK=1
     ES2VEC_NAME_RERANK_AUTO=1
+
+RAG 问答需配置对话 API（与 Embeddings 共用 Key）::
+
+    DASHSCOPE_API_KEY=...
+    ES2VEC_CHAT_MODEL=qwen-turbo
 """
 from __future__ import annotations
 
@@ -54,7 +59,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from es2vec.core.config import DEFAULT_INDEX_NAME, TEXT_TOKEN_FIELD
+from es2vec.core.config import DEFAULT_INDEX_NAME, RAG_DEFAULT_TOP_K, TEXT_TOKEN_FIELD
+from es2vec.core.rag_service import (
+    RagExecutionError,
+    RagRequest,
+    RagResponse,
+    execute_rag,
+    rag_response_to_dict,
+    rag_with_retrieval_payload,
+)
 from es2vec.core.search_service import (
     SearchExecutionError,
     SearchRequest,
@@ -77,16 +90,25 @@ def _run_search(req: SearchRequest) -> dict[str, Any]:
     return search_response_to_dict(resp)
 
 
+def _run_rag(req: RagRequest, *, debug: bool = False) -> dict[str, Any]:
+    try:
+        if debug:
+            return rag_with_retrieval_payload(req)
+        return rag_response_to_dict(execute_rag(req))
+    except RagExecutionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 app = FastAPI(
-    title="es2vec 混合检索",
-    description="Elasticsearch 全文 + 向量混合检索 REST 接口",
-    version="1.1.0",
+    title="es2vec 混合检索与 RAG",
+    description="Elasticsearch 全文 + 向量混合检索；/api/v1/rag 为检索增强生成问答",
+    version="1.2.0",
 )
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": app.version, "rag": "enabled"}
 
 
 @app.get("/api/search", response_model=SearchResponse)
@@ -146,6 +168,27 @@ def api_search_v1_get(
 def api_search_v1_post(req: SearchRequest) -> dict[str, Any]:
     """v1 混合检索（POST JSON，推荐其它系统集成）。"""
     return _run_search(req)
+
+
+@app.post("/api/v1/rag", response_model=RagResponse)
+def api_rag_v1_post(
+    req: RagRequest,
+    debug: bool = Query(default=False, description="为 true 时额外返回 retrieval 原始 hits"),
+) -> dict[str, Any]:
+    """RAG 问答：混合检索 + LLM 生成（需配置对话 API Key 与 ES2VEC_CHAT_MODEL）。"""
+    return _run_rag(req, debug=debug)
+
+
+@app.get("/api/v1/rag", response_model=RagResponse)
+def api_rag_v1_get(
+    query: str = Query(..., min_length=1, alias="q"),
+    index: str = Query(default=DEFAULT_INDEX_NAME),
+    top_k: int = Query(default=RAG_DEFAULT_TOP_K, ge=1, le=20),
+    debug: bool = Query(default=False),
+) -> dict[str, Any]:
+    """RAG 问答（GET，参数子集）。"""
+    req = RagRequest(query=query, index=index, top_k=top_k)
+    return _run_rag(req, debug=debug)
 
 
 @app.get("/")
