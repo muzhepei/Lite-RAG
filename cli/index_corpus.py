@@ -376,14 +376,13 @@ def main() -> None:
             )
         dims = first_dim
     else:
-        embedder = get_local_embedder(model_name)
-        dims = args.vector_dims or embedder.embedding_dim or DEFAULT_VECTOR_DIMS
-        first_dim = len(embedder.encode_passages([docs[0].text], batch_size=1)[0])
-        if args.vector_dims and args.vector_dims != first_dim:
+        # 先建索引、后加载 SentenceTransformer，避免 2GB ECS 上与 ES 同时占满内存导致 create 超时
+        dims = args.vector_dims or DEFAULT_VECTOR_DIMS
+        if not args.vector_dims:
             print(
-                f"警告: --vector-dims={args.vector_dims} 与模型输出维度 {first_dim} 不一致，将使用 {first_dim}。"
+                f"提示: 本地模型尚未加载，将先用 vector_dims={dims} 创建索引"
+                f"（可用 --vector-dims 或 ES2VEC_VECTOR_DIMS 覆盖）；建索引后再加载模型并校验维度。"
             )
-        dims = first_dim
 
     props = _mapping_properties(
         dims,
@@ -395,6 +394,19 @@ def main() -> None:
         include_chunk_fields=bool(args.chunk_fields),
     )
     ensure_index(es, args.index, properties=props, settings=settings, recreate=args.recreate)
+
+    if (
+        not args.use_es_inference
+        and not args.use_openai_compatible_embedding
+        and embedder is None
+    ):
+        embedder = get_local_embedder(model_name)
+        first_dim = len(embedder.encode_passages([docs[0].text], batch_size=1)[0])
+        if first_dim != dims:
+            raise SystemExit(
+                f"向量维度与索引 mapping 不一致: mapping={dims}, 模型输出={first_dim}。"
+                f"请加 --vector-dims {first_dim} 与 --recreate 后重跑。"
+            )
 
     def actions_for_batch(batch: list[IndexDoc]) -> list[dict[str, Any]]:
         texts = [d.text for d in batch]

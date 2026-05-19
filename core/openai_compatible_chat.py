@@ -7,6 +7,7 @@ OpenAI 兼容 Chat Completions API（百炼 compatible-mode、魔搭推理网关
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, Sequence
 
 from es2vec.core.config import (
@@ -113,6 +114,34 @@ class OpenAICompatibleChat:
                 "total_tokens": getattr(resp.usage, "total_tokens", None),
             }
         return text, usage
+
+    def stream_complete(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> Iterator[str]:
+        """流式生成 assistant 回复，逐块 yield 文本片段。"""
+        temp = self._temperature if temperature is None else temperature
+        mt = self._max_tokens if max_tokens is None else max_tokens
+
+        stream = self._client.chat.completions.create(
+            model=self._model,
+            messages=list(messages),
+            temperature=temp,
+            max_tokens=mt,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None or delta.content is None:
+                continue
+            text = delta.content
+            if text:
+                yield text
 
 
 def default_chat_client() -> OpenAICompatibleChat:

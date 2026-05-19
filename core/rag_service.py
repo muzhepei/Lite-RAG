@@ -2,6 +2,7 @@
 """RAG 编排：混合检索 → 上下文组装 → LLM 生成。"""
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -186,6 +187,98 @@ def execute_rag(
         sources=sources,
         usage=usage,
     )
+
+
+def execute_rag_stream(
+    req: RagRequest,
+    *,
+    chat: OpenAICompatibleChat | None = None,
+    include_retrieval: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """
+    流式 RAG：检索完成后以 SSE 事件形式逐块产出 LLM 文本。
+
+    事件类型:
+      - meta: 检索元信息
+      - retrieval: 原始 hits（仅 include_retrieval=True）
+      - delta: 文本片段
+      - done: 完整 answer、sources、usage
+    """
+    try:
+        search_resp = execute_hybrid_search(_search_request_from_rag(req))
+    except SearchExecutionError as exc:
+        raise RagExecutionError(f"检索失败: {exc}") from exc
+
+    hits = [h for h in search_resp.hits if isinstance(h, dict)]
+    max_ctx = (
+        req.max_context_chars
+        if req.max_context_chars is not None
+        else RAG_MAX_CONTEXT_CHARS
+    )
+    context, source_meta = build_context_from_hits(hits, max_chars=max_ctx)
+
+    client = chat or default_chat_client()
+
+    yield {
+        "event": "meta",
+        "query": req.query,
+        "model": client.model,
+        "index": req.index,
+        "retrieval_total": search_resp.total,
+        "retrieval_returned": search_resp.returned,
+    }
+
+    if include_retrieval:
+        yield {
+            "event": "retrieval",
+            "retrieval": search_response_to_dict(search_resp),
+        }
+
+    if not context.strip():
+        msg = "资料中未找到相关信息，无法根据语料回答该问题。"
+        yield {"event": "delta", "content": msg}
+        yield {
+            "event": "done",
+            "answer": msg,
+            "sources": [],
+            "usage": {},
+        }
+        return
+
+    system = (req.system_prompt or DEFAULT_RAG_SYSTEM_PROMPT).strip()
+    messages = build_rag_messages(query=req.query, context=context, system_prompt=system)
+    temp = req.temperature if req.temperature is not None else RAG_CHAT_TEMPERATURE
+    max_tok = req.max_tokens if req.max_tokens is not None else RAG_CHAT_MAX_TOKENS
+
+    full_parts: list[str] = []
+    try:
+        for chunk in client.stream_complete(
+            messages,
+            temperature=temp,
+            max_tokens=max_tok,
+        ):
+            full_parts.append(chunk)
+            yield {"event": "delta", "content": chunk}
+    except Exception as exc:
+        raise RagExecutionError(f"LLM 生成失败: {exc}") from exc
+
+    answer = "".join(full_parts).strip()
+    if not answer:
+        answer = "模型未返回有效内容，请稍后重试或检查 ES2VEC_CHAT_MODEL 与 API Key。"
+        yield {"event": "delta", "content": answer}
+
+    sources: list[dict[str, Any]] = []
+    if req.include_sources:
+        sources = [
+            RagSource.model_validate(s).model_dump(mode="json") for s in source_meta
+        ]
+
+    yield {
+        "event": "done",
+        "answer": answer,
+        "sources": sources,
+        "usage": {},
+    }
 
 
 def rag_response_to_dict(resp: RagResponse) -> dict[str, Any]:

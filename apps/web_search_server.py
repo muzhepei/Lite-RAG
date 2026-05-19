@@ -29,6 +29,7 @@ RAG 问答需配置对话 API（与 Embeddings 共用 Key）::
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -56,15 +57,15 @@ _bootstrap_es2vec_path()
 
 # https://fastapi.tiangolo.com/
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from es2vec.core.config import DEFAULT_INDEX_NAME, RAG_DEFAULT_TOP_K, TEXT_TOKEN_FIELD
 from es2vec.core.rag_service import (
     RagExecutionError,
     RagRequest,
-    RagResponse,
     execute_rag,
+    execute_rag_stream,
     rag_response_to_dict,
     rag_with_retrieval_payload,
 )
@@ -97,6 +98,30 @@ def _run_rag(req: RagRequest, *, debug: bool = False) -> dict[str, Any]:
         return rag_response_to_dict(execute_rag(req))
     except RagExecutionError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _sse_line(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _rag_sse_generator(req: RagRequest, *, debug: bool = False):
+    try:
+        for event in execute_rag_stream(req, include_retrieval=debug):
+            yield _sse_line(event)
+    except RagExecutionError as exc:
+        yield _sse_line({"event": "error", "message": str(exc)})
+
+
+def _run_rag_stream(req: RagRequest, *, debug: bool = False) -> StreamingResponse:
+    return StreamingResponse(
+        _rag_sse_generator(req, debug=debug),
+        media_type="text/event-stream; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 app = FastAPI(
@@ -170,24 +195,30 @@ def api_search_v1_post(req: SearchRequest) -> dict[str, Any]:
     return _run_search(req)
 
 
-@app.post("/api/v1/rag", response_model=RagResponse)
+@app.post("/api/v1/rag", response_model=None)
 def api_rag_v1_post(
     req: RagRequest,
     debug: bool = Query(default=False, description="为 true 时额外返回 retrieval 原始 hits"),
-) -> dict[str, Any]:
+    stream: bool = Query(default=True, description="为 true 时 SSE 流式返回生成内容"),
+) -> StreamingResponse | dict[str, Any]:
     """RAG 问答：混合检索 + LLM 生成（需配置对话 API Key 与 ES2VEC_CHAT_MODEL）。"""
+    if stream:
+        return _run_rag_stream(req, debug=debug)
     return _run_rag(req, debug=debug)
 
 
-@app.get("/api/v1/rag", response_model=RagResponse)
+@app.get("/api/v1/rag", response_model=None)
 def api_rag_v1_get(
     query: str = Query(..., min_length=1, alias="q"),
     index: str = Query(default=DEFAULT_INDEX_NAME),
     top_k: int = Query(default=RAG_DEFAULT_TOP_K, ge=1, le=20),
     debug: bool = Query(default=False),
-) -> dict[str, Any]:
+    stream: bool = Query(default=True, description="为 true 时 SSE 流式返回生成内容"),
+) -> StreamingResponse | dict[str, Any]:
     """RAG 问答（GET，参数子集）。"""
     req = RagRequest(query=query, index=index, top_k=top_k)
+    if stream:
+        return _run_rag_stream(req, debug=debug)
     return _run_rag(req, debug=debug)
 
 

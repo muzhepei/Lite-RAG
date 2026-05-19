@@ -38,7 +38,13 @@ def _bootstrap_es2vec_path() -> None:
 _bootstrap_es2vec_path()
 
 from es2vec.core.config import DEFAULT_INDEX_NAME, RAG_DEFAULT_TOP_K
-from es2vec.core.rag_service import RagExecutionError, RagRequest, execute_rag, rag_response_to_dict
+from es2vec.core.rag_service import (
+    RagExecutionError,
+    RagRequest,
+    execute_rag,
+    execute_rag_stream,
+    rag_response_to_dict,
+)
 
 
 def _print_rag(data: dict) -> None:
@@ -62,26 +68,83 @@ def _print_rag(data: dict) -> None:
     print("=" * 60 + "\n")
 
 
+def _collect_rag_stream(req: RagRequest) -> dict:
+    """静默收集流式 RAG 事件，返回汇总 dict。"""
+    meta: dict = {}
+    done: dict = {}
+    for event in execute_rag_stream(req):
+        kind = event.get("event")
+        if kind == "meta":
+            meta = event
+        elif kind == "done":
+            done = event
+        elif kind == "error":
+            raise RagExecutionError(event.get("message") or "RAG 生成失败")
+    return {**meta, **done}
+
+
+def _print_rag_stream(req: RagRequest) -> None:
+    """流式打印 RAG 回答。"""
+    meta: dict = {}
+    print("\n" + "=" * 60)
+    for event in execute_rag_stream(req):
+        kind = event.get("event")
+        if kind == "meta":
+            meta = event
+            print(f"问题: {event.get('query')}")
+            print(f"模型: {event.get('model')}  索引: {event.get('index')}")
+            print(
+                f"检索: 返回 {event.get('retrieval_returned')} "
+                f"/ 约 {event.get('retrieval_total')} 条"
+            )
+            print("-" * 60)
+        elif kind == "delta":
+            print(event.get("content") or "", end="", flush=True)
+        elif kind == "done":
+            print()
+            sources = event.get("sources") or []
+            if sources:
+                print("-" * 60)
+                print("引用片段:")
+                for s in sources:
+                    ref = s.get("ref")
+                    preview = (s.get("text_preview") or "")[:120]
+                    print(f"  [{ref}] {preview}")
+            print("=" * 60 + "\n")
+        elif kind == "error":
+            raise RagExecutionError(event.get("message") or "RAG 生成失败")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="es2vec RAG 问答")
     ap.add_argument("--q", "--query", dest="query", default="", help="单次提问；省略则进入交互")
     ap.add_argument("--index", default=DEFAULT_INDEX_NAME, help="ES 索引名")
     ap.add_argument("--top-k", type=int, default=RAG_DEFAULT_TOP_K, help="检索条数")
     ap.add_argument("--json", action="store_true", help="输出完整 JSON")
+    ap.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="禁用流式输出，等待完整 JSON 后再打印",
+    )
     args = ap.parse_args()
 
     def ask_once(q: str) -> int:
         req = RagRequest(query=q, index=args.index, top_k=args.top_k)
         try:
-            resp = execute_rag(req)
+            if args.json:
+                if args.no_stream:
+                    data = rag_response_to_dict(execute_rag(req))
+                else:
+                    data = _collect_rag_stream(req)
+                print(json.dumps(data, ensure_ascii=False, indent=2))
+            elif args.no_stream:
+                data = rag_response_to_dict(execute_rag(req))
+                _print_rag(data)
+            else:
+                _print_rag_stream(req)
         except RagExecutionError as exc:
             print(f"RAG 失败: {exc}", file=sys.stderr)
             return 1
-        data = rag_response_to_dict(resp)
-        if args.json:
-            print(json.dumps(data, ensure_ascii=False, indent=2))
-        else:
-            _print_rag(data)
         return 0
 
     q0 = (args.query or "").strip()

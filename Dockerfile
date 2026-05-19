@@ -9,10 +9,21 @@ RUN apt-get update \
 
 COPY requirements.txt .
 
-# CPU 版 PyTorch，减小镜像体积
-# https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -r requirements.txt
+# 国内 ECS：勿从 PyPI 主站装 torch（Linux 默认 CUDA 版 500MB+，还会拉数 GB nvidia-*）
+# 先装 CPU 版（约 150–200MB），再装其余依赖并锁定 torch 版本，避免被 requirements 升级回 CUDA 版
+# PyPI 清华：https://mirrors.tuna.tsinghua.edu.cn/help/pypi/
+# PyTorch CPU 阿里云：https://mirrors.aliyun.com/pytorch-wheels/cpu/
+# PyTorch CPU 官方（海外）：https://download.pytorch.org/whl/cpu
+ARG TORCH_VERSION=2.5.1
+ARG PYTORCH_CPU_FIND_LINKS=https://mirrors.aliyun.com/pytorch-wheels/cpu/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir --upgrade pip \
+    && pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    && pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn \
+    && pip install --no-cache-dir "torch==${TORCH_VERSION}" \
+        -f "${PYTORCH_CPU_FIND_LINKS}" \
+    && echo "torch==${TORCH_VERSION}" > /tmp/torch-constraint.txt \
+    && pip install --no-cache-dir -r requirements.txt -c /tmp/torch-constraint.txt
 
 COPY . .
 

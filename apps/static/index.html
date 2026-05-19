@@ -392,6 +392,88 @@
       return "请求失败";
     }
 
+    async function consumeRagStream(res) {
+      if (!res.ok) {
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("application/json")) {
+          const data = await res.json();
+          throw new Error(parseApiError(data));
+        }
+        throw new Error(`请求失败 (${res.status})`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let fullAnswer = "";
+      let metaData = null;
+      let retrievalData = null;
+
+      answerText.textContent = "";
+      answerBox.classList.add("visible");
+      meta.textContent = "检索完成，正在生成…";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() || "";
+
+        for (const block of blocks) {
+          const line = block.trim();
+          if (!line.startsWith("data: ")) continue;
+          let data;
+          try {
+            data = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+
+          if (data.event === "meta") {
+            metaData = data;
+            meta.innerHTML =
+              `RAG「<strong>${escapeHtml(data.query || "")}</strong>」` +
+              ` · 模型 <strong>${escapeHtml(data.model || "—")}</strong>` +
+              ` · 检索 <strong>${data.retrieval_returned ?? "—"}</strong> 段`;
+          } else if (data.event === "retrieval" && data.retrieval) {
+            retrievalData = data.retrieval;
+            renderHits(retrievalData);
+          } else if (data.event === "delta" && data.content) {
+            fullAnswer += data.content;
+            answerText.textContent = fullAnswer;
+          } else if (data.event === "done") {
+            if (data.answer) {
+              fullAnswer = data.answer;
+              answerText.textContent = fullAnswer;
+            }
+            const src = data.sources || [];
+            sourcesMini.textContent = src.length
+              ? "引用 " +
+                src
+                  .map((s) => `[${s.ref}] ${(s.text_preview || "").slice(0, 40)}…`)
+                  .join(" · ")
+              : "";
+            if (metaData) {
+              meta.innerHTML =
+                `RAG「<strong>${escapeHtml(metaData.query || "")}</strong>」` +
+                ` · 模型 <strong>${escapeHtml(metaData.model || "—")}</strong>` +
+                ` · 检索 <strong>${metaData.retrieval_returned ?? "—"}</strong> 段`;
+            }
+            if (retrievalData) {
+              renderHits(retrievalData);
+            } else if (!resultsEl.children.length) {
+              resultsEl.innerHTML =
+                '<li class="empty">回答已生成；可在 OpenAPI /api/v1/rag?debug=1 查看完整检索列表。</li>';
+            }
+          } else if (data.event === "error") {
+            throw new Error(data.message || "RAG 生成失败");
+          }
+        }
+      }
+    }
+
     async function doSearch(q) {
       hideError();
       wrap.classList.add("loading");
@@ -404,32 +486,12 @@
 
       try {
         if (currentMode === "rag") {
-          const res = await fetch("/api/v1/rag?debug=true", {
+          const res = await fetch("/api/v1/rag?stream=true&debug=true", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query: q }),
           });
-          const data = await res.json();
-          if (!res.ok) throw new Error(parseApiError(data));
-
-          answerText.textContent = data.answer || "";
-          const src = data.sources || [];
-          sourcesMini.textContent = src.length
-            ? "引用 " +
-              src.map((s) => `[${s.ref}] ${(s.text_preview || "").slice(0, 40)}…`).join(" · ")
-            : "";
-          answerBox.classList.add("visible");
-
-          meta.innerHTML =
-            `RAG「<strong>${escapeHtml(data.query)}</strong>」` +
-            ` · 模型 <strong>${escapeHtml(data.model || "—")}</strong>` +
-            ` · 检索 <strong>${data.retrieval_returned}</strong> 段`;
-          if (data.retrieval && data.retrieval.hits) {
-            renderHits(data.retrieval);
-          } else {
-            resultsEl.innerHTML =
-              '<li class="empty">回答已生成；可在 OpenAPI /api/v1/rag?debug=1 查看完整检索列表。</li>';
-          }
+          await consumeRagStream(res);
         } else {
           const params = new URLSearchParams({ q, k: "10" });
           const res = await fetch(`/api/search?${params}`);
