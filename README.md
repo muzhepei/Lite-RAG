@@ -124,7 +124,7 @@ python apps/interactive_search.py --index es2vec_corpus_chunks --no-rrf
 
 ```env
 DASHSCOPE_API_KEY=你的百炼Key
-ES2VEC_CHAT_MODEL=qwen-turbo
+ES2VEC_CHAT_MODEL=qwen3.6-plus
 ES2VEC_INDEX=es2vec_corpus_chunks
 ```
 
@@ -598,7 +598,7 @@ flowchart LR
 | `ES2VEC_NAME_RERANK` | `1` 强制按查询词密度二阶段重排 |
 | `ES2VEC_NAME_RERANK_AUTO` | 默认开启：≤4 字且无空格的查询自动重排 |
 | `ES2VEC_NAME_RERANK_POOL` | 重排候选池，默认 `50` |
-| `ES2VEC_CHAT_MODEL` | RAG 对话模型（`chat/completions`）；魔搭默认 `Qwen/Qwen2.5-7B-Instruct`；仅百炼自动路由时默认 `qwen-turbo` |
+| `ES2VEC_CHAT_MODEL` | RAG 对话模型（`chat/completions`）；魔搭默认 `Qwen/Qwen2.5-7B-Instruct`；百炼自动路由默认 `qwen3.6-plus` |
 | `ES2VEC_DASHSCOPE_CHAT_MODEL` | 可选；百炼自动路由时覆盖默认对话模型 |
 | `ES2VEC_RAG_TOP_K` | 每次问答检索片段数，默认 `3` |
 | `ES2VEC_RAG_MAX_CONTEXT_CHARS` | 参考资料写入 prompt 的最大字符，超出截断，默认 `12000` |

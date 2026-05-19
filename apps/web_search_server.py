@@ -24,7 +24,7 @@ Web 混合检索服务：提供 REST API 与静态搜索页面。
 RAG 问答需配置对话 API（与 Embeddings 共用 Key）::
 
     DASHSCOPE_API_KEY=...
-    ES2VEC_CHAT_MODEL=qwen-turbo
+    ES2VEC_CHAT_MODEL=qwen3.6-plus
 """
 from __future__ import annotations
 

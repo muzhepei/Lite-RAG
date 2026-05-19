@@ -24,16 +24,16 @@ es2vec 默认常量。
   OpenAI 兼容 Embeddings（--use-openai-compatible-embedding，与本地/ES Inference 三选一）：
   ES2VEC_OPENAI_BASE_URL   未设置时默认魔搭推理网关；若仅设置了 DASHSCOPE_API_KEY（百炼）且未改此项，会自动改为百炼 compatible-mode 地址
   ES2VEC_DASHSCOPE_BASE_URL  可选；自动走百炼时覆盖默认 ``https://dashscope.aliyuncs.com/compatible-mode/v1``（新加坡域见阿里云文档）
-  ES2VEC_DASHSCOPE_EMBEDDING_MODEL  可选；自动走百炼且未指定 ES2VEC_OPENAI_EMBEDDING_MODEL 时默认 ``text-embedding-v4``
+  ES2VEC_DASHSCOPE_EMBEDDING_MODEL  可选；自动走百炼时默认 ``text-embedding-v4``（Qwen3 文本向量，见百炼文档）
   ES2VEC_DASHSCOPE_EMBEDDING_BATCH_MAX  百炼兼容 ``/embeddings`` 单次 input 条数上限，默认 10（超出会 400）
   DASHSCOPE_API_KEY  百炼 API Key（与魔搭 Token 不同）；按序兼容 API_KEY、OPENAI_API_KEY、MODELSCOPE_API_KEY
   MODELSCOPE_API_KEY  仅当 ``ES2VEC_OPENAI_BASE_URL`` 指向 ``api-inference.modelscope.cn`` 时使用魔搭 Token
   勿在值前写 ``Bearer ``；未设密钥时回退占位符 ``----``
-  ES2VEC_OPENAI_EMBEDDING_MODEL  魔搭默认 ``Qwen/Qwen3-Embedding-8B``；随百炼自动路由时默认 ``text-embedding-v4``
+  ES2VEC_OPENAI_EMBEDDING_MODEL  魔搭默认 ``Qwen/Qwen3-Embedding-8B``；百炼自动路由时用 ``text-embedding-v4``（勿填魔搭模型名）
   ES2VEC_EMBEDDING_DIMS   默认 1024；设为 0 表示不在此固定维，改由首次 API 响应推断
 
   RAG 对话（/api/v1/rag、cli/rag_chat.py；与 Embeddings 共用 ES2VEC_OPENAI_BASE_URL 与 API Key）：
-  ES2VEC_CHAT_MODEL            对话模型 ID（chat/completions，非 embedding）；魔搭默认 Qwen/Qwen2.5-7B-Instruct；仅 DASHSCOPE_API_KEY 且未改网关时默认 qwen-turbo
+  ES2VEC_CHAT_MODEL            对话模型 ID（chat/completions，非 embedding）；魔搭默认 Qwen/Qwen2.5-7B-Instruct；百炼自动路由默认 qwen3.6-plus
   ES2VEC_DASHSCOPE_CHAT_MODEL  可选；百炼自动路由时覆盖默认对话模型（否则用 ES2VEC_CHAT_MODEL 或上述默认）
   ES2VEC_RAG_TOP_K             每次问答检索 Top-K 片段数，默认 3
   ES2VEC_RAG_MAX_CONTEXT_CHARS 参考资料写入 prompt 的最大字符，超出截断，默认 12000
@@ -109,6 +109,7 @@ _DEF_OPENAI_BASE = "https://api-inference.modelscope.cn/v1"
 _DEF_DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DEF_OPENAI_KEY = "----"
 _DEF_OPENAI_MODEL = "Qwen/Qwen3-Embedding-8B"
+# 百炼 OpenAI 兼容 Embeddings：https://help.aliyun.com/zh/model-studio/developer-reference/embedding-interfaces-compatible-with-openai
 _DEF_DASHSCOPE_MODEL = "text-embedding-v4"
 
 _url_env_raw = os.environ.get("ES2VEC_OPENAI_BASE_URL")
@@ -139,12 +140,22 @@ OPENAI_COMPATIBLE_BASE_URL = (
     if OPENAI_EMBEDDING_ROUTE_AUTO_TO_DASHSCOPE
     else _initial_openai_base
 )
+def _is_modelscope_style_embedding_model(model: str) -> bool:
+    """魔搭推理上的模型 id（如 Qwen/...），不能用于百炼 compatible-mode embeddings。"""
+    m = model.strip()
+    if m == _DEF_OPENAI_MODEL:
+        return True
+    return m.startswith("Qwen/")
+
+
 OPENAI_COMPATIBLE_EMBEDDING_MODEL = (
     (os.environ.get("ES2VEC_DASHSCOPE_EMBEDDING_MODEL") or _DEF_DASHSCOPE_MODEL).strip()
     if (
         OPENAI_EMBEDDING_ROUTE_AUTO_TO_DASHSCOPE
-        and not _model_env_explicit
-        and _initial_openai_model == _DEF_OPENAI_MODEL
+        and (
+            not _model_env_explicit
+            or _is_modelscope_style_embedding_model(_initial_openai_model)
+        )
     )
     else _initial_openai_model
 )
@@ -172,7 +183,8 @@ DASHSCOPE_EMBEDDING_MAX_BATCH = _dsb_bs if _dsb_bs > 0 else 10
 
 # OpenAI 兼容 Chat（RAG 生成层）
 _DEF_CHAT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
-_DEF_DASHSCOPE_CHAT_MODEL = "qwen-turbo"
+# 百炼 Chat Completions 模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
+_DEF_DASHSCOPE_CHAT_MODEL = "qwen3.6-plus"
 
 _chat_model_env_raw = os.environ.get("ES2VEC_CHAT_MODEL")
 _initial_chat_model = (_chat_model_env_raw or _DEF_CHAT_MODEL).strip()
