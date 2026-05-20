@@ -1,10 +1,24 @@
 # es2vec 项目说明
 
-Elasticsearch **多语言向量** + **全文 / 向量混合检索**，并支持 **RAG 问答**（检索 + OpenAI 兼容对话）。
+**es2vec** 是一套围绕 **Elasticsearch** 的**多语言向量检索**方案：将语料写成 `text` + `vector` 写入 ES，支持 **BM25 全文** 与 **kNN 向量** 的混合检索，并可在此基础上做 **RAG 问答**（检索片段 → 大模型生成回答）。示例语料为《三国演义》，架构对任意 JSONL/文本语料通用。
 
-- **默认（本地）**：`intfloat/multilingual-e5-small` 生成 **384 维**向量，写入 ES 后做 BM25 + kNN 混合检索。
-- **推荐（百炼）**：`qwen3-vl-embedding` 生成 **1024 维**向量（可配置），RAG 对话默认 `qwen3.6-plus`。
-- **关键约束**：建索引与检索必须使用**同一套** embedding 模型与向量维度，否则检索会报 `runtime error`。
+| 路径 | 典型配置 |
+|------|----------|
+| **默认（本地）** | `intfloat/multilingual-e5-small` → **384 维**，BM25 + kNN 混合检索 |
+| **推荐（百炼）** | `qwen3-vl-embedding` → **1024 维**（可配置），RAG 对话默认 `qwen3.6-plus` |
+
+> **关键约束**：建索引与检索必须使用**同一套** embedding 模型与向量维度，否则 ES 会报 `runtime error`，或程序在检索前校验「查询向量维度与索引不一致」。
+
+## 能力一览
+
+| 能力 | 说明 |
+|------|------|
+| 混合检索 | 向量语义 + 关键词 BM25；支持 RRF 或加权脚本融合 |
+| 多向量来源 | 本地 E5、百炼 `qwen3-vl-embedding`、魔搭/OpenAI 兼容 API、ES Inference |
+| 人名检索优化 | chunk 级索引 + 查询词密度二阶段重排（短查询可自动触发） |
+| 章级 RAG | 先拉 chunk 池再按章聚合；优先章摘要，否则整章或单 chunk |
+| 多种入口 | CLI、Web UI、REST、gRPC、终端交互 |
+| 部署 | 本机 Python 或 Docker Compose（ES + Web + gRPC） |
 
 ## 目录
 
@@ -25,34 +39,90 @@ Elasticsearch **多语言向量** + **全文 / 向量混合检索**，并支持 
 
 ## 架构概览
 
-ES 里只有**一套检索索引**：每条文档存 `text`（关键词检索）+ `vector`（语义检索）。RAG 从同一索引取片段，再交给对话模型生成回答。
+ES 里只有**一套检索索引**：每条文档存 `text`（关键词检索）+ `vector`（语义检索）。RAG 从同一索引取片段，再交给对话模型生成回答。同一索引可并存两种文档类型：`doc_kind=chunk`（参与检索排序）与 `doc_kind=chapter_summary`（章回摘要，仅供 RAG 上下文，检索时自动过滤）。
+
+### 端到端数据流
 
 ```mermaid
-flowchart LR
-  subgraph index["建索引 index_corpus"]
-    A[语料 text] --> B[Embedding 模型]
-    B --> C["vector（384 或 1024 等）"]
-    C --> D[(ES 索引)]
+flowchart TB
+  subgraph ingest["建索引 index_corpus"]
+    A[语料 JSONL/文本] --> B[Embedding 模型]
+    B --> C["vector 384 或 1024 等"]
+    C --> D[(Elasticsearch 索引)]
+    A --> D
   end
-  subgraph search["检索 search_hybrid / Web"]
+
+  subgraph query["检索 search_hybrid / Web / gRPC"]
     E[用户查询] --> F[同一 Embedding 模型]
     F --> G[查询向量]
     G --> D
-    D --> H[命中片段 text]
+    D --> H[命中 text 片段]
+    H --> I[可选：密度重排 / 章信息 enrich]
   end
+
   subgraph rag["RAG（可选）"]
-    H --> I["Chat 模型 qwen3.6-plus"]
-    I --> J[生成回答]
+    H --> J[章级聚合 rag_aggregate]
+    J --> K[拼 prompt rag_prompt]
+    K --> L["Chat 模型 qwen3.6-plus 等"]
+    L --> M[生成回答]
   end
 ```
+
+### 三层模型分工
 
 | 层级 | 作用 | 百炼默认 | 本地默认 |
 |------|------|----------|----------|
 | **Embedding** | 建索引 + 检索向量化 | `qwen3-vl-embedding` | `multilingual-e5-small` |
 | **Chat** | RAG 生成回答 | `qwen3.6-plus` | 需自行配置 API |
-| **ES 索引** | 存 text + vector | 同一索引，无单独「生成索引」 | 同左 |
+| **ES 索引** | 存 text + vector + 元数据 | 同一索引，无单独「生成索引」 | 同左 |
 
 > **注意**：`qwen3.6-plus` 是对话模型，**不能**用于 ES 向量建模；ES 向量请用 `ES2VEC_DASHSCOPE_EMBEDDING_MODEL`（默认 `qwen3-vl-embedding`）。
+
+### 混合检索（简要）
+
+1. 用与建索引相同的 Embedder 将查询向量化。
+2. ES 并行执行 **kNN**（语义）与 **match/BM25**（关键词，`text` 或可选 `text_tokens`）。
+3. 融合：**RRF**，或加权脚本（Web 默认向量权重 0.85 / 关键词 0.15，`ES2VEC_KW_SAT=25`）。
+4. 短查询（如 ≤4 字人名）可触发 **密度二阶段重排**（`core/search_rerank.py`）。
+5. 检索查询自动排除 `doc_kind=chapter_summary`，仅对 `chunk` 排序。
+
+### RAG 编排
+
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant R as rag_service
+  participant S as search_service
+  participant ES as Elasticsearch
+  participant A as rag_aggregate
+  participant C as Chat API
+
+  U->>R: 问题
+  R->>S: 混合检索 fetch_k 条 chunk
+  S->>ES: BM25 + kNN
+  ES-->>S: chunk 命中
+  S-->>R: hits
+  R->>A: 按章打分、去重 top_k
+  A-->>R: 章摘要 / 整章 / 单 chunk
+  R->>C: system + 参考资料 + 问题
+  C-->>R: 流式或完整回答
+  R-->>U: 回答 + 引用来源
+```
+
+**送入 LLM 的上下文优先级**（须 chunk 索引且带 `chapter_id` / `chunk_index`）：
+
+1. 索引中的 **章回摘要**（`doc_kind=chapter_summary`，`ES2VEC_RAG_USE_CHAPTER_SUMMARY=1` 默认开启）
+2. 同章命中 chunk 数 ≥ `ES2VEC_RAG_MULTI_HIT_THRESHOLD`（默认 2）→ **整章正文**
+3. 否则使用 **单 chunk**
+
+页面引用区仍可展示 ES 中的整章原文（`chapter_enrich`）。
+
+### 设计要点
+
+- **单一索引、双文档类型**：`chunk` 参与检索；`chapter_summary` 只 enrich RAG，由 `doc_kind_filter` 隔离。
+- **服务层复用**：`search_service` / `rag_service` 供 Web、gRPC、CLI 共用，避免多套检索逻辑。
+- **网关自动路由**：仅设 `DASHSCOPE_API_KEY` 时自动走百炼；`qwen3-vl-embedding` 走原生 multimodal API，其它模型走 compatible-mode `/embeddings`。
+- **检索前维度校验**：`get_index_vector_dims` 与查询向量对比，减少 ES runtime 错误。
 
 ---
 
@@ -134,7 +204,7 @@ python apps/web_search_server.py
 |------|------|
 | `GET /api/health` | 健康检查 |
 | `POST /api/v1/search` | 混合检索 |
-| `POST /api/v1/rag` | RAG 问答 |
+| `POST /api/v1/rag` | RAG 问答（支持流式） |
 | `GET /docs` | OpenAPI |
 
 终端交互检索：
@@ -225,9 +295,7 @@ curl.exe -u elastic:你的密码 "http://localhost:9200/es2vec_corpus_chunks/_ma
 python cli/rag_chat.py --q "草船借箭是谁向曹操借的箭？" --index es2vec_corpus_chunks
 ```
 
-流程：**混合检索（`fetch_k` chunk 池）** → **章级聚合**（同章多命中可拉整章）→ 拼参考资料 → **对话模型生成**。
-
-**章级聚合（方案 B）**：须使用带 `chapter_id` / `chunk_index` 的 chunk 索引（`index_corpus --chunk-fields`）。ES 先取 `ES2VEC_RAG_FETCH_K`（默认 20）条 **chunk**（自动排除 `doc_kind=chapter_summary`），按章打分去重后保留 `ES2VEC_RAG_TOP_K`（默认 3）条参考资料。送入 LLM 的优先级：索引中有 **章回摘要**（`ES2VEC_RAG_USE_CHAPTER_SUMMARY=1`，默认开启）→ 否则同章多命中 ≥ `ES2VEC_RAG_MULTI_HIT_THRESHOLD`（默认 2）时用整章 → 否则用单 chunk。页面引用区仍展示 ES 整章原文。
+流程：**混合检索（`fetch_k` chunk 池）** → **章级聚合** → 拼参考资料 → **对话模型生成**。章级参数见 [架构概览 · RAG 编排](#rag-编排) 与下方环境变量 `ES2VEC_RAG_*`。
 
 ### qwen3-vl-embedding 维度说明
 
@@ -333,7 +401,7 @@ copy local_test.env.docker.example local_test.env
 
 ## 推荐工作流
 
-### 流程图
+### 向量来源与入口（总览）
 
 ```mermaid
 flowchart TB
@@ -348,14 +416,28 @@ flowchart TB
   G -->|是| I[qwen3.6-plus 生成回答]
 ```
 
+### 三国演义示例流水线
+
+```mermaid
+flowchart LR
+  RAW[three_kingdoms_by_chapter.jsonl] --> CHUNK[chunk_corpus.py]
+  CHUNK --> SUM[summarize_chapters.py 可选]
+  SUM --> IDX[index_corpus.py]
+  CHUNK --> IDX
+  IDX --> ES[(ES 索引)]
+  ES --> WEB[Web / CLI / gRPC]
+  WEB --> RAG[RAG 可选]
+```
+
 ### 操作步骤
 
 1. 配置环境：本机 `local_test.env`；Docker 复制 `.env.example` → `.env`。
 2. 选择向量来源（本地 384 维 **或** 百炼 qwen3-vl-embedding），**建索引与检索保持一致**。
 3. 人名检索：先 `chunk_corpus.py`，再 `index_corpus.py --chunk-fields`。
-4. 检索：`search_hybrid.py`、Web（`docker compose up -d web`）或 `interactive_search.py`。
-5. 可选 RAG：配置 `DASHSCOPE_API_KEY` + `ES2VEC_DASHSCOPE_CHAT_MODEL`，使用 `rag_chat.py` 或 `POST /api/v1/rag`。
-6. 切换 embedding 模型后：**必须 `--recreate` 重建索引**，并重启 Web/gRPC。
+4. 可选章摘要：运行 `summarize_chapters.py`，建索引时 `--merge-chapter-summaries`（方案 A）。
+5. 检索：`search_hybrid.py`、Web（`docker compose up -d web`）或 `interactive_search.py`。
+6. 可选 RAG：配置 `DASHSCOPE_API_KEY` + `ES2VEC_DASHSCOPE_CHAT_MODEL`，使用 `rag_chat.py` 或 `POST /api/v1/rag`。
+7. 切换 embedding 模型后：**必须 `--recreate` 重建索引**，并重启 Web/gRPC。
 
 ---
 
@@ -366,11 +448,13 @@ es2vec/
 ├── core/                 # 核心库（config、es_client、embedder、search、rag）
 ├── cli/                  # index_corpus、search_hybrid、rag_chat 等
 ├── preprocess/           # 文本 → JSONL
-├── apps/                 # Web、gRPC、交互检索
+├── apps/                 # Web、gRPC、交互检索、static/
 ├── examples/
 │   ├── data/             # 语料与同义词
-│   ├── output/           # 预处理产物
-│   └── three_kingdoms_ext/
+│   └── three_kingdoms_ext/   # chunk、摘要、实体索引等扩展
+├── proto/                # gRPC 定义
+├── grpc_gen/             # 生成的 gRPC 代码
+├── scripts/              # Docker 检查、RAG 延迟分析等
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example          # Docker / ECS 环境模板
@@ -391,10 +475,15 @@ es2vec/
 | `es_client.py` | ES 客户端、`ensure_index`、`get_index_vector_dims`（检索前维度校验） |
 | `local_embedder.py` | 本地 SentenceTransformer（384 维，E5 前缀） |
 | `openai_compatible_embedder.py` | 百炼/魔搭 `/v1/embeddings`，支持 `dimensions` 参数 |
-| `search_service.py` | 统一混合检索（REST / gRPC 复用） |
+| `dashscope_multimodal_embedder.py` | 百炼原生 multimodal API（`qwen3-vl-embedding`） |
+| `openai_compatible_chat.py` | OpenAI 兼容对话客户端（RAG 生成） |
+| `search_service.py` | 统一混合检索（REST / gRPC / CLI 复用） |
+| `search_response.py` | 检索响应格式化 |
 | `search_rerank.py` | 人名密度二阶段重排 |
-| `rag_aggregate.py` | RAG 章级聚合（章摘要 / 整章 / 单 chunk） |
 | `doc_kind_filter.py` | 检索仅 chunk、摘要查询过滤 |
+| `chapter_enrich.py` | 命中附加整章信息、RAG 引用区整章原文 |
+| `rag_aggregate.py` | RAG 章级聚合（章摘要 / 整章 / 单 chunk） |
+| `rag_prompt.py` | RAG 上下文与 messages 组装 |
 | `rag_service.py` | RAG 编排（检索 → 章级聚合 → Chat） |
 
 ### cli/
@@ -414,6 +503,7 @@ es2vec/
 | `web_search_server.py` | Web UI + REST（检索 / RAG） |
 | `grpc_search_server.py` | gRPC 混合检索 |
 | `interactive_search.py` | 终端交互检索 |
+| `static/index.html` | 搜索与 RAG 前端页面 |
 
 ---
 
@@ -452,6 +542,7 @@ Proto：`proto/es2vec_search.proto`
 | `data/synonyms_example.txt` | 同义词样例 |
 | `three_kingdoms_ext/chunk_corpus.py` | 章 → chunk |
 | `three_kingdoms_ext/summarize_chapters.py` | 按回离线摘要 → `chapter_summaries.jsonl` |
+| `three_kingdoms_ext/out/three_kingdoms_chunks.jsonl` | 完整 chunk 语料 |
 | `three_kingdoms_ext/out/sample_chunks.jsonl` | 快速试跑用 chunk |
 
 ---
