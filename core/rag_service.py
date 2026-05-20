@@ -17,6 +17,7 @@ from es2vec.core.config import (
     RAG_MAX_CONTEXT_CHARS,
     RAG_MULTI_HIT_THRESHOLD,
 )
+from es2vec.core.chapter_enrich import enrich_rag_sources_with_chapter_full_text
 from es2vec.core.es_client import get_es
 from es2vec.core.openai_compatible_chat import OpenAICompatibleChat, default_chat_client
 from es2vec.core.rag_aggregate import aggregate_hits_for_rag
@@ -99,10 +100,15 @@ class RagSource(BaseModel):
     score: float | None = None
     chapter_id: str | int | None = None
     chunk_index: int | None = None
-    source_kind: Literal["chapter", "chunk"] | None = None
+    source_kind: Literal["chapter", "chunk", "chapter_summary"] | None = None
     chapter_title: str | None = None
     hit_count: int | None = None
+    text: str = ""
+    text_for_llm: str | None = None
+    text_truncated: bool = False
+    text_total_chars: int | None = None
     text_preview: str = ""
+    chapter: dict[str, Any] | None = None
 
 
 class RagResponse(BaseModel):
@@ -118,6 +124,21 @@ class RagResponse(BaseModel):
 
 class RagExecutionError(Exception):
     """RAG 流程失败（检索、LLM 等）。"""
+
+
+def _friendly_llm_error(exc: Exception) -> str:
+    """将百炼等内容审核错误转为可操作提示。"""
+    msg = str(exc)
+    lower = msg.lower()
+    if "datainspectionfailed" in lower or "inappropriate content" in lower:
+        return (
+            "大模型输出未通过百炼内容安全审核（《三国演义》中的战争、杀戮等描写可能被误判）。"
+            "可尝试：① 换更简短的问题；② 减小 ES2VEC_RAG_MAX_CONTEXT_CHARS；"
+            "③ 在 .env 中设置 ES2VEC_DASHSCOPE_DATA_INSPECTION=disable（仅用于合规的自建语料，"
+            "须符合阿里云账号与内容安全策略）。原始错误: "
+            + msg
+        )
+    return f"LLM 生成失败: {msg}"
 
 
 def _resolve_fetch_k(req: RagRequest) -> int:
@@ -183,7 +204,11 @@ def _build_rag_context(
         multi_hit_threshold=_resolve_multi_hit_threshold(req),
         score_alpha=_resolve_chapter_score_alpha(req),
     )
-    return build_context_from_units(units, max_chars=max_ctx)
+    context, source_meta = build_context_from_units(units, max_chars=max_ctx)
+    source_meta = enrich_rag_sources_with_chapter_full_text(
+        source_meta, es, req.index
+    )
+    return context, source_meta
 
 
 def execute_rag(
@@ -236,7 +261,7 @@ def execute_rag(
             max_tokens=max_tok,
         )
     except Exception as exc:
-        raise RagExecutionError(f"LLM 生成失败: {exc}") from exc
+        raise RagExecutionError(_friendly_llm_error(exc)) from exc
 
     if not answer:
         answer = "模型未返回有效内容，请稍后重试或检查 ES2VEC_CHAT_MODEL 与 API Key。"
@@ -322,7 +347,7 @@ def execute_rag_stream(
             full_parts.append(chunk)
             yield {"event": "delta", "content": chunk}
     except Exception as exc:
-        raise RagExecutionError(f"LLM 生成失败: {exc}") from exc
+        raise RagExecutionError(_friendly_llm_error(exc)) from exc
 
     answer = "".join(full_parts).strip()
     if not answer:

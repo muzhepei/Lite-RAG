@@ -114,6 +114,29 @@
       color: var(--text);
     }
 
+    .list-hint {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: -0.35rem 0 1rem;
+      padding: 0.55rem 0.75rem;
+      border-radius: 8px;
+      background: rgba(110, 231, 183, 0.08);
+      border: 1px solid rgba(110, 231, 183, 0.22);
+      line-height: 1.5;
+    }
+
+    .list-hint[hidden] {
+      display: none;
+    }
+
+    .merge-badge {
+      font-size: 0.75rem;
+      color: #a7f3d0;
+      padding: 0.1rem 0.45rem;
+      border-radius: 4px;
+      background: rgba(110, 231, 183, 0.12);
+    }
+
     .error {
       padding: 0.85rem 1rem;
       border-radius: 8px;
@@ -178,6 +201,23 @@
       word-break: break-word;
     }
 
+    .scroll-panel {
+      max-height: 20rem;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 0.35rem;
+      scrollbar-gutter: stable;
+    }
+
+    .scroll-panel::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .scroll-panel::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
     .chapter-title {
       margin: 0 0 0.5rem;
       font-size: 1rem;
@@ -207,9 +247,6 @@
       color: var(--muted);
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 24rem;
-      overflow-y: auto;
-      padding-right: 0.25rem;
     }
 
     .empty {
@@ -292,10 +329,6 @@
 
     .answer-box {
       display: none;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1.1rem 1.2rem;
       margin-bottom: 1.25rem;
     }
 
@@ -303,13 +336,36 @@
       display: block;
     }
 
-    .answer-title {
-      font-size: 0.8rem;
+    .answer-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem 1.1rem 1rem;
+    }
+
+    .answer-panel summary {
+      cursor: pointer;
+      font-size: 0.85rem;
       font-weight: 600;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      margin: 0 0 0.6rem;
+      color: var(--accent);
+      list-style: none;
+      user-select: none;
+    }
+
+    .answer-panel summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .answer-panel summary::before {
+      content: "▸ ";
+    }
+
+    .answer-panel[open] summary::before {
+      content: "▾ ";
+    }
+
+    .answer-scroll {
+      margin-top: 0.65rem;
     }
 
     .answer-text {
@@ -346,8 +402,12 @@
     </form>
 
     <div class="answer-box" id="answerBox" aria-live="polite">
-      <p class="answer-title">RAG 回答</p>
-      <p class="answer-text" id="answerText"></p>
+      <details class="answer-panel" id="answerPanel" open>
+        <summary>RAG 回答（点击收起/展开）</summary>
+        <div class="answer-scroll scroll-panel" id="answerScroll">
+          <p class="answer-text" id="answerText"></p>
+        </div>
+      </details>
       <p class="sources-mini" id="sourcesMini"></p>
     </div>
 
@@ -360,6 +420,8 @@
           <button type="button" class="hint-btn" data-q="定军山死的最高曹军将领是谁">定军山死的最高曹军将领是谁</button>
           <button type="button" class="hint-btn" data-q="郭嘉最大的功绩是什么">郭嘉最大的功绩是什么</button>
           <button type="button" class="hint-btn" data-q="空城计吓退了谁">空城计吓退了谁</button>
+          <button type="button" class="hint-btn" data-q="李白是谁">李白是谁</button>
+          <button type="button" class="hint-btn" data-q="书里面最精彩的部分是哪些">书里面最精彩的部分是哪些</button>
         </div>
       </div>
     </div>
@@ -395,6 +457,7 @@
 
     <div class="error" id="errorBox" role="alert"></div>
     <p class="meta" id="meta" aria-live="polite"></p>
+    <p class="list-hint" id="listHint" hidden aria-live="polite"></p>
     <ul class="results" id="results"></ul>
   </div>
 
@@ -403,11 +466,13 @@
     const input = document.getElementById("query");
     const btn = document.getElementById("btnSearch");
     const meta = document.getElementById("meta");
+    const listHint = document.getElementById("listHint");
     const resultsEl = document.getElementById("results");
     const errorBox = document.getElementById("errorBox");
     const wrap = document.querySelector(".wrap");
     const answerBox = document.getElementById("answerBox");
     const answerText = document.getElementById("answerText");
+    const answerScroll = document.getElementById("answerScroll");
     const sourcesMini = document.getElementById("sourcesMini");
     const modeSearch = document.getElementById("modeSearch");
     const modeRag = document.getElementById("modeRag");
@@ -453,18 +518,123 @@
       return Number(score).toFixed(4);
     }
 
-    function renderHits(data) {
-      const hits = data.hits || [];
-      const showScore = currentMode === "rag";
+    function hitScore(h) {
+      const s = Number(h?.score);
+      return Number.isFinite(s) ? s : 0;
+    }
+
+    /** 同 chapter_id 只保留相关度最高的一条，并记录合并段数 */
+    function dedupeHitsByChapter(hits) {
+      const raw = Array.isArray(hits) ? hits : [];
+      const noChapter = [];
+      const byChapter = new Map();
+
+      for (const h of raw) {
+        if (!h || typeof h !== "object") continue;
+        const cid = h.chapter_id;
+        if (cid == null || String(cid).trim() === "") {
+          noChapter.push({ ...h, merged_from: 1 });
+          continue;
+        }
+        const key = String(cid);
+        const prev = byChapter.get(key);
+        if (!prev || hitScore(h) > hitScore(prev)) {
+          const mergedFrom = (prev?.merged_from || 0) + 1;
+          byChapter.set(key, { ...h, merged_from: mergedFrom });
+        } else {
+          prev.merged_from = (prev.merged_from || 1) + 1;
+        }
+      }
+
+      const merged = [...byChapter.values(), ...noChapter];
+      merged.sort((a, b) => hitScore(b) - hitScore(a));
+      merged.forEach((h, i) => {
+        h.rank = i + 1;
+      });
+
+      return {
+        hits: merged,
+        rawCount: raw.length,
+        dedupedCount: merged.length,
+        removedCount: Math.max(0, raw.length - merged.length),
+      };
+    }
+
+    function setListHint(text) {
+      if (!text) {
+        listHint.hidden = true;
+        listHint.textContent = "";
+        return;
+      }
+      listHint.hidden = false;
+      listHint.textContent = text;
+    }
+
+    function sourcesToHits(sources) {
+      return (sources || []).map((s, i) => {
+        const ch = s.chapter || {};
+        const fullFromEs = (ch.full_text || "").trim();
+        const body = (
+          fullFromEs ||
+          (s.text || s.text_preview || "").trim()
+        );
+        const llmTruncated = Boolean(s.text_truncated);
+        const total = s.text_total_chars != null ? s.text_total_chars : body.length;
+        return {
+          rank: s.ref != null ? s.ref : i + 1,
+          id: s.id,
+          score: s.score,
+          chapter_id: s.chapter_id,
+          chunk_index: s.chunk_index,
+          text: body,
+          text_truncated: llmTruncated,
+          llm_truncated: llmTruncated,
+          text_total_chars: total,
+          source_kind: s.source_kind,
+          chapter_title: s.chapter_title || ch.title,
+          chapter: ch.full_text ? ch : undefined,
+          hit_count: s.hit_count,
+          merged_from: s.hit_count != null && s.hit_count > 1 ? s.hit_count : 1,
+        };
+      });
+    }
+
+    function renderHits(data, options = {}) {
+      const { dedupe = true, showScore = currentMode === "rag" } = options;
+      let hits = data.hits || [];
+      let dedupeInfo = null;
+
+      if (dedupe) {
+        dedupeInfo = dedupeHitsByChapter(hits);
+        hits = dedupeInfo.hits;
+        if (dedupeInfo.removedCount > 0) {
+          setListHint(
+            options.hintPrefix
+              ? `${options.hintPrefix} 已按章节去重：展示 ${dedupeInfo.dedupedCount} 条（ES 返回 ${dedupeInfo.rawCount} 条，合并同章 ${dedupeInfo.removedCount} 条）。`
+              : `已按章节去重：展示 ${dedupeInfo.dedupedCount} 条（ES 返回 ${dedupeInfo.rawCount} 条，合并同章 ${dedupeInfo.removedCount} 条）。同章仅保留相关度最高的一段。`
+          );
+        } else if (options.hintPrefix) {
+          setListHint(options.hintPrefix);
+        } else {
+          setListHint("");
+        }
+      } else if (options.hintPrefix) {
+        setListHint(options.hintPrefix);
+      } else {
+        setListHint("");
+      }
+
       if (hits.length === 0) {
         resultsEl.innerHTML =
           '<li class="empty">演义中未找到相关段落，可换人物名、典故或名场面再试。</li>';
         return;
       }
+
       resultsEl.innerHTML = hits
         .map((h) => {
           const ch = h.chapter || {};
           const title =
+            h.chapter_title ||
             ch.title ||
             (ch.chapter_number != null ? `第 ${ch.chapter_number} 回` : "") ||
             (h.chapter_id ? String(h.chapter_id) : "");
@@ -472,22 +642,69 @@
             ? `<p class="chapter-title">${escapeHtml(title)}</p>`
             : "";
           const extra = [];
-          if (h.chapter_id != null && !ch.title) extra.push(`章节 ${h.chapter_id}`);
-          if (h.chunk_index != null) extra.push(`片段 ${h.chunk_index}`);
+          if (h.source_kind === "chapter_summary") extra.push("章回摘要");
+          else if (h.source_kind === "chapter") extra.push("整章");
+          else if (h.source_kind === "chunk") extra.push("片段");
+          if (h.chapter_id != null && !ch.title && !h.chapter_title) {
+            extra.push(`章节 ${h.chapter_id}`);
+          }
+          if (h.chunk_index != null && h.source_kind !== "chapter") {
+            extra.push(`片段 ${h.chunk_index}`);
+          }
           const extraHtml = extra.length
             ? `<span class="doc-id">${extra.join(" · ")}</span>`
             : "";
           const idHtml = h.id
             ? `<span class="doc-id">${escapeHtml(String(h.id))}</span>`
             : "";
-          const trunc = h.text_truncated ? "（命中片段已截断）" : "";
-          const fullText = ch.full_text || "";
-          const chapterFullHtml =
-            fullText.trim() &&
-            `<details class="chapter-full">
-              <summary>展开整章正文（${ch.chunk_count != null ? ch.chunk_count + " 段" : "全文"}）</summary>
-              <p class="chapter-full-text">${escapeHtml(fullText)}</p>
+          const mergeHtml =
+            h.merged_from > 1
+              ? `<span class="merge-badge">同章 ${h.merged_from} 段已合并</span>`
+              : "";
+          let trunc = "";
+          if (h.llm_truncated || h.text_truncated) {
+            const total = h.text_total_chars;
+            trunc =
+              h.source_kind === "chapter_summary"
+                ? "（送入大模型时摘要可能被截断，下方为 ES 整章全文）"
+                : h.source_kind === "chapter"
+                  ? total != null
+                    ? `（送入大模型时已截断，下方为 ES 整章约 ${total} 字）`
+                    : "（送入大模型时已截断，下方为 ES 整章全文）"
+                  : "（送入大模型时已截断）";
+          }
+          const fullText = (ch.full_text || "").trim();
+          const bodyText = (h.text || "").trim();
+          const chunkLabel =
+            ch.chunk_count != null ? `${ch.chunk_count} 段` : "全文";
+          const showSnippet =
+            bodyText &&
+            (!fullText || bodyText.length < fullText.length - 80);
+          let bodyHtml = "";
+          let chapterFullHtml = "";
+          if (fullText) {
+            const openFull = !showSnippet ? " open" : "";
+            chapterFullHtml = `<details class="chapter-full"${openFull}>
+              <summary>展开 ES 整章正文（${chunkLabel}）</summary>
+              <p class="chapter-full-text scroll-panel">${escapeHtml(fullText)}</p>
             </details>`;
+          }
+          if (showSnippet) {
+            bodyHtml = `<p class="snippet-label">${escapeHtml(
+              h.source_kind === "chapter_summary"
+                ? "章回摘要（送入模型）"
+                : "命中片段"
+            )}</p>
+              <p class="hit-text scroll-panel">${escapeHtml(bodyText)}${trunc}</p>`;
+          } else if (bodyText && !fullText) {
+            bodyHtml = `<p class="snippet-label">${escapeHtml(
+              h.source_kind === "chapter" ? "整章正文（ES 全文）" : "正文"
+            )}</p>
+              <details class="chapter-full" open>
+              <summary>正文（点击收起）</summary>
+              <p class="chapter-full-text scroll-panel">${escapeHtml(bodyText)}${trunc}</p>
+            </details>`;
+          }
           const scoreHtml = showScore
             ? `<span class="score">相关度 ${formatScore(h.score)}</span>`
             : "";
@@ -496,16 +713,26 @@
               <div class="hit-head">
                 <span class="rank">#${h.rank}</span>
                 ${scoreHtml}
+                ${mergeHtml}
                 ${extraHtml}
                 ${idHtml}
               </div>
               ${titleHtml}
-              <p class="snippet-label">命中片段</p>
-              <p class="hit-text">${escapeHtml(h.text || "")}${trunc}</p>
-              ${chapterFullHtml || ""}
+              ${bodyHtml}
+              ${chapterFullHtml}
             </li>`;
         })
         .join("");
+    }
+
+    function scrollPanelToBottom(el) {
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function setAnswerContent(text) {
+      answerText.textContent = text;
+      scrollPanelToBottom(answerScroll);
     }
 
     function escapeHtml(s) {
@@ -580,7 +807,7 @@
         throw new Error(text.trim() || `请求失败 (${res.status})`);
       }
 
-      answerText.textContent = "";
+      setAnswerContent("");
       answerBox.classList.add("visible");
       meta.textContent = "检索完成，正在生成…";
 
@@ -598,15 +825,18 @@
             ` · 检索 <strong>${data.retrieval_returned ?? "—"}</strong> 段`;
         } else if (data.event === "retrieval" && data.retrieval) {
           retrievalData = data.retrieval;
-          renderHits(retrievalData);
+          renderHits(retrievalData, {
+            hintPrefix:
+              "以下为 ES 检索池（生成回答前会再章级聚合，通常仅取前 3 条送入模型）。",
+          });
         } else if (data.event === "delta" && data.content) {
           fullAnswer += data.content;
-          answerText.textContent = fullAnswer;
+          setAnswerContent(fullAnswer);
         } else if (data.event === "done") {
           sawDone = true;
           if (data.answer) {
             fullAnswer = data.answer;
-            answerText.textContent = fullAnswer;
+            setAnswerContent(fullAnswer);
           }
           const src = data.sources || [];
           sourcesMini.textContent = src.length
@@ -621,9 +851,21 @@
               ` · 模型 <strong>${escapeHtml(metaData.model || "—")}</strong>` +
               ` · 检索 <strong>${metaData.retrieval_returned ?? "—"}</strong> 段`;
           }
-          if (retrievalData) {
-            renderHits(retrievalData);
+          if (src.length > 0) {
+            renderHits(
+              { hits: sourcesToHits(src) },
+              {
+                dedupe: false,
+                showScore: true,
+                hintPrefix: `以下为 RAG 引用（${src.length} 条）：列表展示 ES 整章/原文，不受 ES2VEC_RAG_MAX_CONTEXT_CHARS 限制；仅送入大模型的内容可能更短。`,
+              }
+            );
+          } else if (retrievalData) {
+            renderHits(retrievalData, {
+              hintPrefix: "以下为 ES 检索结果（未收到聚合引用，已按章去重展示）。",
+            });
           } else if (!resultsEl.children.length) {
+            setListHint("");
             resultsEl.innerHTML =
               '<li class="empty">回答已生成；可在 OpenAPI /api/v1/rag?debug=1 查看完整检索列表。</li>';
           }
@@ -658,7 +900,7 @@
 
       if (!sawDone) {
         if (fullAnswer.trim()) {
-          answerText.textContent = fullAnswer;
+          setAnswerContent(fullAnswer);
           sourcesMini.textContent = "（流式连接提前结束，以上为已生成片段）";
         } else {
           throw new Error("RAG 未返回完整结果，请确认已 docker compose build web 并重建容器，且 .env 中 DASHSCOPE_API_KEY 有效");
@@ -671,6 +913,7 @@
       wrap.classList.add("loading");
       btn.disabled = true;
       meta.textContent = currentMode === "rag" ? "检索并生成中…" : "检索中…";
+      setListHint("");
       resultsEl.innerHTML = "";
       if (currentMode !== "rag") {
         answerBox.classList.remove("visible");
@@ -695,11 +938,15 @@
           meta.innerHTML =
             `《三国演义》检索「<strong>${escapeHtml(data.query)}</strong>」` +
             ` · 返回 <strong>${data.returned}</strong> 段（约 ${data.total} 条相关）`;
-          renderHits(data);
+          renderHits(data, {
+            hintPrefix:
+              "仅检索模式：结果来自 Elasticsearch，已按章节去重（同章只显示相关度最高的一段）。",
+          });
         }
       } catch (err) {
         showError(err.message || "网络错误，请稍后重试");
         meta.textContent = "";
+        setListHint("");
         answerBox.classList.remove("visible");
       } finally {
         wrap.classList.remove("loading");

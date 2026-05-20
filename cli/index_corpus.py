@@ -66,7 +66,11 @@ from elasticsearch.helpers import bulk
 from es2vec.core.es_client import ensure_index, get_es
 from es2vec.core.config import (
     CHAPTER_ID_FIELD,
+    CHAPTER_TITLE_FIELD,
     CHUNK_INDEX_FIELD,
+    DOC_KIND_CHAPTER_SUMMARY,
+    DOC_KIND_CHUNK,
+    DOC_KIND_FIELD,
     DEFAULT_INDEX_NAME,
     DEFAULT_INFERENCE_ID,
     DEFAULT_SYNONYMS_SET_ID,
@@ -108,6 +112,8 @@ class IndexDoc:
     text: str
     chapter_id: str | None = None
     chunk_index: int | None = None
+    doc_kind: str | None = None
+    chapter_title: str | None = None
 
 
 def _mapping_properties(
@@ -143,6 +149,8 @@ def _mapping_properties(
     if include_chunk_fields:
         props[CHAPTER_ID_FIELD] = {"type": "keyword"}
         props[CHUNK_INDEX_FIELD] = {"type": "integer"}
+        props[DOC_KIND_FIELD] = {"type": "keyword"}
+        props[CHAPTER_TITLE_FIELD] = {"type": "text"}
     return props
 
 
@@ -171,6 +179,8 @@ def iter_index_docs(path: Path, *, parse_chunk_fields: bool) -> Iterator[IndexDo
                     _id = str(_id)
                 chapter_id: str | None = None
                 chunk_index: int | None = None
+                doc_kind: str | None = None
+                chapter_title: str | None = None
                 if parse_chunk_fields:
                     raw_ch = obj.get("chapter_id")
                     if isinstance(raw_ch, str) and raw_ch.strip():
@@ -180,11 +190,19 @@ def iter_index_docs(path: Path, *, parse_chunk_fields: bool) -> Iterator[IndexDo
                         chunk_index = raw_i
                     elif isinstance(raw_i, str) and raw_i.strip().lstrip("-").isdigit():
                         chunk_index = int(raw_i.strip())
+                    raw_kind = obj.get("doc_kind")
+                    if isinstance(raw_kind, str) and raw_kind.strip():
+                        doc_kind = raw_kind.strip()
+                    raw_title = obj.get("chapter_title")
+                    if isinstance(raw_title, str) and raw_title.strip():
+                        chapter_title = raw_title.strip()
                 yield IndexDoc(
                     doc_id=_id,
                     text=text.strip(),
                     chapter_id=chapter_id,
                     chunk_index=chunk_index,
+                    doc_kind=doc_kind,
+                    chapter_title=chapter_title,
                 )
         return
 
@@ -269,9 +287,18 @@ def main() -> None:
     ap.add_argument(
         "--chunk-fields",
         action="store_true",
-        help="mapping 增加 chapter_id、chunk_index，并从 JSONL 读取写入（见 three_kingdoms_ext.chunk_corpus 输出）",
+        help="mapping 增加 chapter_id、chunk_index、doc_kind、chapter_title（见 chunk_corpus / summarize_chapters 输出）",
+    )
+    ap.add_argument(
+        "--merge-chapter-summaries",
+        type=Path,
+        default=None,
+        help="追加章摘要 JSONL（doc_kind=chapter_summary）；须与 --chunk-fields 同用",
     )
     args = ap.parse_args()
+
+    if args.merge_chapter_summaries is not None and not args.chunk_fields:
+        raise SystemExit("--merge-chapter-summaries 须与 --chunk-fields 同时使用")
 
     if args.use_es_inference and args.use_openai_compatible_embedding:
         raise SystemExit("--use-es-inference 与 --use-openai-compatible-embedding 不能同时使用")
@@ -329,8 +356,21 @@ def main() -> None:
     )
 
     docs = list(iter_index_docs(path, parse_chunk_fields=bool(args.chunk_fields)))
+    if args.merge_chapter_summaries is not None:
+        sp = Path(args.merge_chapter_summaries)
+        if not sp.is_file():
+            raise SystemExit(f"章摘要文件不存在: {sp}")
+        docs.extend(iter_index_docs(sp, parse_chunk_fields=True))
     if not docs:
         raise SystemExit("未读取到任何有效行")
+
+    n_chunk = sum(
+        1
+        for d in docs
+        if (d.doc_kind or DOC_KIND_CHUNK) != DOC_KIND_CHAPTER_SUMMARY
+    )
+    n_summary = len(docs) - n_chunk
+    print(f"待索引: chunk {n_chunk} 条, chapter_summary {n_summary} 条, 合计 {len(docs)} 条")
 
     model_name = args.local_model.strip() or None
 
@@ -434,6 +474,9 @@ def main() -> None:
                     src[CHAPTER_ID_FIELD] = doc.chapter_id
                 if doc.chunk_index is not None:
                     src[CHUNK_INDEX_FIELD] = doc.chunk_index
+                src[DOC_KIND_FIELD] = doc.doc_kind or DOC_KIND_CHUNK
+                if doc.chapter_title:
+                    src[CHAPTER_TITLE_FIELD] = doc.chapter_title
             acts.append(
                 {
                     "_op_type": "index",

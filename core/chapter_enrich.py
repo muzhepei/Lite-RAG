@@ -5,7 +5,16 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from es2vec.core.config import CHAPTER_ID_FIELD, CHUNK_INDEX_FIELD, TEXT_FIELD
+from es2vec.core.config import (
+    CHAPTER_ID_FIELD,
+    CHAPTER_TITLE_FIELD,
+    CHUNK_INDEX_FIELD,
+    TEXT_FIELD,
+)
+from es2vec.core.doc_kind_filter import (
+    es_filter_chapter_summaries_only,
+    es_filter_chunks_only,
+)
 
 # 如：第一回 宴桃园豪杰三结义 斩黄巾英雄首立功
 _CHAPTER_TITLE_RE = re.compile(
@@ -57,7 +66,14 @@ def fetch_chapters_from_index(
         resp = es.search(
             index=index,
             size=min(len(ids) * max_chunks_per_chapter, 10_000),
-            query={"terms": {CHAPTER_ID_FIELD: ids}},
+            query={
+                "bool": {
+                    "filter": [
+                        {"terms": {CHAPTER_ID_FIELD: ids}},
+                        es_filter_chunks_only(),
+                    ],
+                },
+            },
             sort=[{CHAPTER_ID_FIELD: "asc"}, {CHUNK_INDEX_FIELD: "asc"}],
             _source=[TEXT_FIELD, CHAPTER_ID_FIELD, CHUNK_INDEX_FIELD],
         )
@@ -101,6 +117,116 @@ def fetch_chapters_from_index(
             "chunk_count": len(parts),
         }
     return out
+
+
+def fetch_chapter_summaries_from_index(
+    es: Any,
+    index: str,
+    chapter_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """
+    批量拉取各章 ``doc_kind=chapter_summary`` 文档。
+
+    Returns:
+        ``{chapter_id: {chapter_id, title, summary}}``
+    """
+    ids = sorted({c.strip() for c in chapter_ids if (c or "").strip()})
+    if not ids:
+        return {}
+
+    try:
+        resp = es.search(
+            index=index,
+            size=min(len(ids), 500),
+            query={
+                "bool": {
+                    "filter": [
+                        {"terms": {CHAPTER_ID_FIELD: ids}},
+                        es_filter_chapter_summaries_only(),
+                    ],
+                },
+            },
+            _source=[TEXT_FIELD, CHAPTER_ID_FIELD, CHAPTER_TITLE_FIELD],
+        )
+    except Exception:
+        return {}
+
+    body = resp.body if hasattr(resp, "body") else resp
+    hits_raw = (body.get("hits") or {}).get("hits") or []
+    if not isinstance(hits_raw, list):
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    for h in hits_raw:
+        if not isinstance(h, dict):
+            continue
+        src = h.get("_source") or {}
+        if not isinstance(src, dict):
+            continue
+        cid = str(src.get(CHAPTER_ID_FIELD) or "").strip()
+        if not cid or cid in out:
+            continue
+        summary = str(src.get(TEXT_FIELD) or "").strip()
+        if not summary:
+            continue
+        title = str(src.get(CHAPTER_TITLE_FIELD) or "").strip()
+        if not title:
+            title = extract_chapter_title(summary)
+        out[cid] = {
+            "chapter_id": cid,
+            "title": title,
+            "summary": summary,
+        }
+    return out
+
+
+def enrich_rag_sources_with_chapter_full_text(
+    sources: list[dict[str, Any]],
+    es: Any,
+    index: str,
+) -> list[dict[str, Any]]:
+    """
+    为 RAG 引用列表从 ES 拉取整章 ``full_text``，供前端展示（不受 prompt 长度限制）。
+
+    ``source_kind=chapter`` 时 ``text`` 替换为整章；``chunk`` 时保留命中片段，并附加 ``chapter`` 供展开。
+    """
+    if not sources:
+        return sources
+
+    chapter_ids: list[str] = []
+    for s in sources:
+        if not isinstance(s, dict):
+            continue
+        cid = s.get(CHAPTER_ID_FIELD)
+        if cid is not None:
+            chapter_ids.append(str(cid).strip())
+    if not chapter_ids:
+        return sources
+
+    chapters = fetch_chapters_from_index(es, index, chapter_ids)
+    if not chapters:
+        return sources
+
+    for s in sources:
+        if not isinstance(s, dict):
+            continue
+        cid = str(s.get(CHAPTER_ID_FIELD) or "").strip()
+        if not cid or cid not in chapters:
+            continue
+        ch = chapters[cid]
+        s["chapter"] = ch
+        full = str(ch.get("full_text") or "").strip()
+        if not full:
+            continue
+        title = str(ch.get("title") or "").strip()
+        if title:
+            s["chapter_title"] = title
+        if s.get("source_kind") == "chapter":
+            s["text"] = full
+            s["text_total_chars"] = len(full)
+            cap = 4000
+            s["text_preview"] = full[:cap] + ("…" if len(full) > cap else "")
+    return sources
 
 
 def enrich_hits_with_chapters(

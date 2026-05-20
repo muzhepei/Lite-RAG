@@ -18,6 +18,7 @@ from es2vec.core.config import (
     RAG_CHAT_MAX_TOKENS,
     RAG_CHAT_TEMPERATURE,
     chat_enable_thinking,
+    dashscope_data_inspection_extra_headers,
     normalize_openai_compatible_api_key,
 )
 
@@ -87,6 +88,9 @@ class OpenAICompatibleChat:
         }
         if "dashscope.aliyuncs.com" in OPENAI_COMPATIBLE_BASE_URL.lower():
             kwargs["extra_body"] = {"enable_thinking": self._enable_thinking}
+        inspection_headers = dashscope_data_inspection_extra_headers()
+        if inspection_headers:
+            kwargs["extra_headers"] = inspection_headers
         return kwargs
 
     def complete(

@@ -39,9 +39,12 @@ es2vec 默认常量。
   ES2VEC_CHAT_MODEL            对话模型 ID（chat/completions，非 embedding）；魔搭默认 Qwen/Qwen2.5-7B-Instruct；百炼自动路由默认 qwen3.6-plus
   ES2VEC_DASHSCOPE_CHAT_MODEL  可选；百炼自动路由时覆盖默认对话模型（否则用 ES2VEC_CHAT_MODEL 或上述默认）
   ES2VEC_CHAT_ENABLE_THINKING    1/true 时百炼 Qwen3 等开启深度思考（流式先出 reasoning_content，首字变慢）；RAG 默认 0
+  ES2VEC_DASHSCOPE_DATA_INSPECTION  百炼内容安全：disable 关闭入/出审核；cip 开启；未设用平台默认
+  ES2VEC_DASHSCOPE_DATA_INSPECTION_INPUT / _OUTPUT  分别覆盖 input、output（优先级高于上一项）
   ES2VEC_RAG_TOP_K             送入 LLM 的参考资料条数（章级去重后），默认 3
   ES2VEC_RAG_FETCH_K           ES 检索 chunk 池大小（章级聚合前），默认 20
   ES2VEC_RAG_MULTI_HIT_THRESHOLD  同章命中 chunk 数≥此值则用整章正文，默认 2
+  ES2VEC_RAG_USE_CHAPTER_SUMMARY  1/true 时 RAG 优先用索引中 doc_kind=chapter_summary，默认 1
   ES2VEC_RAG_CHAPTER_SCORE_ALPHA  章级分数命中数 boost 系数，默认 0.3
   ES2VEC_RAG_MAX_CONTEXT_CHARS 参考资料写入 prompt 的最大字符，超出截断，默认 12000
   ES2VEC_RAG_MAX_TOKENS        chat/completions 的 max_tokens，默认 1024
@@ -83,6 +86,12 @@ TEXT_TOKEN_FIELD = "text_tokens"
 # 章内 chunk 元数据（three_kingdoms_ext.chunk_corpus 输出；需 index_corpus --chunk-fields）
 CHAPTER_ID_FIELD = "chapter_id"
 CHUNK_INDEX_FIELD = "chunk_index"
+# 同索引双类型文档：chunk（检索）| chapter_summary（章回摘要，RAG 上下文）
+DOC_KIND_FIELD = "doc_kind"
+DOC_KIND_CHUNK = "chunk"
+DOC_KIND_CHAPTER_SUMMARY = "chapter_summary"
+CHAPTER_TITLE_FIELD = "chapter_title"
+CHAPTER_SUMMARY_CHUNK_INDEX = -1
 # 人物侧索引（three_kingdoms_ext.entity_index）
 CHARACTER_NAME_FIELD = "character"
 CHARACTER_PROFILE_FIELD = "profile_text"
@@ -366,10 +375,69 @@ RAG_MAX_CONTEXT_CHARS = env_int("ES2VEC_RAG_MAX_CONTEXT_CHARS", 12000)
 RAG_CHAT_MAX_TOKENS = env_int("ES2VEC_RAG_MAX_TOKENS", 1024)
 RAG_CHAT_TEMPERATURE = env_float("ES2VEC_CHAT_TEMPERATURE", 0.3)
 
+
+def rag_use_chapter_summary() -> bool:
+    """RAG 是否优先使用索引中的 ``chapter_summary`` 作为送入模型的参考资料。"""
+    raw = os.environ.get("ES2VEC_RAG_USE_CHAPTER_SUMMARY", "1").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 # 仅检索：为命中附加整章正文（默认开启；设 ES2VEC_SEARCH_INCLUDE_CHAPTER=0 关闭）
 def search_include_chapter_default() -> bool:
     raw = os.environ.get("ES2VEC_SEARCH_INCLUDE_CHAPTER", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
+
+
+def _normalize_dashscope_inspection_mode(raw: str) -> str | None:
+    """百炼 ``X-DashScope-DataInspection`` 取值：``disable`` | ``cip``。"""
+    s = (raw or "").strip().lower()
+    if not s:
+        return None
+    if s in ("disable", "off", "0", "false", "no"):
+        return "disable"
+    if s in ("cip", "on", "1", "true", "yes", "enable"):
+        return "cip"
+    return None
+
+
+def dashscope_data_inspection_extra_headers() -> dict[str, str] | None:
+    """
+    百炼 Chat 请求头 ``X-DashScope-DataInspection``（JSON 字符串）。
+
+    古典名著 RAG 遇 ``DataInspectionFailed`` 时，可在合规前提下设
+    ``ES2VEC_DASHSCOPE_DATA_INSPECTION=disable``。
+
+    文档: https://help.aliyun.com/zh/model-studio/content-security
+    """
+    import json
+
+    if not _is_dashscope_compatible_base(OPENAI_COMPATIBLE_BASE_URL):
+        return None
+
+    both = _normalize_dashscope_inspection_mode(
+        os.environ.get("ES2VEC_DASHSCOPE_DATA_INSPECTION", "")
+    )
+    inp = _normalize_dashscope_inspection_mode(
+        os.environ.get("ES2VEC_DASHSCOPE_DATA_INSPECTION_INPUT", "")
+    )
+    out = _normalize_dashscope_inspection_mode(
+        os.environ.get("ES2VEC_DASHSCOPE_DATA_INSPECTION_OUTPUT", "")
+    )
+    if inp is None and out is None and both is not None:
+        inp = out = both
+    elif inp is None and both is not None:
+        inp = both
+    elif out is None and both is not None:
+        out = both
+    if inp is None and out is None:
+        return None
+
+    payload: dict[str, str] = {}
+    if inp is not None:
+        payload["input"] = inp
+    if out is not None:
+        payload["output"] = out
+    return {"X-DashScope-DataInspection": json.dumps(payload, ensure_ascii=False)}
 
 
 def chat_enable_thinking() -> bool:

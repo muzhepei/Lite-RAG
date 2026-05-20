@@ -106,9 +106,18 @@ class DashScopeMultimodalEmbedder:
                         f"url={self._embed_url!r} model={self._model!r}"
                     )
                 if resp.status_code >= 400:
+                    body_preview = resp.text[:500]
+                    if "FreeTierOnly" in body_preview or "free tier" in body_preview.lower():
+                        raise RuntimeError(
+                            "百炼 Embedding 免费额度已用尽（AllocationQuota.FreeTierOnly）。"
+                            "可选：① 百炼控制台关闭「仅使用免费额度」并开通按量付费；"
+                            "② 改用 text-embedding-v4（.env 设 ES2VEC_DASHSCOPE_EMBEDDING_MODEL=text-embedding-v4 后须 --recreate 重建索引）；"
+                            "③ 改用本地向量（去掉 ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING，用 384 维本地模型重建索引）。"
+                            f"\n原始响应: {body_preview}"
+                        )
                     raise RuntimeError(
                         f"百炼多模态 Embedding 请求失败 HTTP {resp.status_code}: "
-                        f"{resp.text[:500]}"
+                        f"{body_preview}"
                     )
                 data = resp.json()
                 if not isinstance(data, dict):

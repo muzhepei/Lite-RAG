@@ -71,6 +71,17 @@ def build_context_from_hits(
     return "\n".join(parts).strip(), sources
 
 
+def _order_units_for_context(units: list[RagContextUnit]) -> list[RagContextUnit]:
+    """章摘要/整章单元优先占用上下文预算，避免先写入短 chunk 挤占空间。"""
+    summaries = [u for u in units if u.kind == "chapter_summary"]
+    chapters = [u for u in units if u.kind == "chapter"]
+    chunks = [u for u in units if u.kind == "chunk"]
+    summaries.sort(key=lambda u: u.score, reverse=True)
+    chapters.sort(key=lambda u: u.score, reverse=True)
+    chunks.sort(key=lambda u: u.score, reverse=True)
+    return summaries + chapters + chunks
+
+
 def build_context_from_units(
     units: list[RagContextUnit],
     *,
@@ -79,8 +90,11 @@ def build_context_from_units(
     """
     将章级聚合后的上下文单元格式化为带编号的参考资料块。
 
+    注意：``max_chars`` 为**全部**参考资料共享上限（默认见 ``ES2VEC_RAG_MAX_CONTEXT_CHARS``）。
+    同章多段命中后虽会拉取整章，若多章合计超长仍会截断；整章优先于单 chunk 写入。
+
     Returns:
-        (context_text, sources) — sources 含 source_kind、chapter_title、hit_count。
+        (context_text, sources) — sources 含 source_kind、chapter_title、hit_count、text。
     """
     if max_chars <= 0:
         return "", []
@@ -88,34 +102,59 @@ def build_context_from_units(
     parts: list[str] = []
     sources: list[dict[str, Any]] = []
     used = 0
+    ref = 0
 
-    for i, u in enumerate(units, start=1):
+    for u in _order_units_for_context(units):
         text = u.text.strip()
         if not text:
             continue
 
-        header_bits: list[str] = [f"[{i}]"]
+        ref += 1
+        header_bits: list[str] = [f"[{ref}]"]
         if u.chapter_id is not None:
             header_bits.append(f"chapter_id={u.chapter_id}")
-        if u.kind == "chapter" and u.title:
+        if u.kind in ("chapter", "chapter_summary") and u.title:
             header_bits.append(f"title={u.title}")
+        if u.kind == "chapter_summary":
+            header_bits.append("kind=chapter_summary")
         if u.kind == "chunk" and u.chunk_index is not None:
             header_bits.append(f"chunk={u.chunk_index}")
         if u.id is not None:
             header_bits.append(f"id={u.id}")
 
-        block = f"{' '.join(header_bits)}\n{text}\n"
-        if used + len(block) > max_chars:
-            remain = max_chars - used
-            if remain < 80:
-                break
-            block = block[:remain] + "\n…（片段已截断）\n"
+        header = f"{' '.join(header_bits)}\n"
+        suffix_chapter = "\n…（整章正文已因上下文长度上限截断，可调大 ES2VEC_RAG_MAX_CONTEXT_CHARS）\n"
+        suffix_summary = "\n…（章回摘要已因上下文长度上限截断）\n"
+        suffix_chunk = "\n…（片段已截断）\n"
+        if u.kind == "chapter_summary":
+            suffix = suffix_summary
+        elif u.kind == "chapter":
+            suffix = suffix_chapter
+        else:
+            suffix = suffix_chunk
 
-        parts.append(block)
-        used += len(block)
+        block_full = f"{header}{text}\n"
+        truncated = False
+        included_text = text
+
+        if used + len(block_full) > max_chars:
+            remain = max_chars - used
+            min_room = 120 if u.kind in ("chapter", "chapter_summary") else 80
+            if remain < min_room:
+                break
+            body_budget = remain - len(header) - len(suffix)
+            if body_budget < 60:
+                break
+            included_text = text[:body_budget]
+            truncated = True
+            block_full = f"{header}{included_text}{suffix}"
+
+        parts.append(block_full)
+        used += len(block_full)
+        preview_cap = 4000 if u.kind in ("chapter", "chapter_summary") else 240
         sources.append(
             {
-                "ref": i,
+                "ref": ref,
                 "id": u.id,
                 "rank": u.rank,
                 "score": u.score,
@@ -124,7 +163,13 @@ def build_context_from_units(
                 "source_kind": u.kind,
                 "chapter_title": u.title,
                 "hit_count": u.hit_count,
-                "text_preview": text[:240] + ("…" if len(text) > 240 else ""),
+                # 引用展示：ES 整章/整段原文（不受 max_chars 截断）
+                "text": text,
+                "text_for_llm": included_text,
+                "text_truncated": truncated,
+                "text_total_chars": len(text),
+                "text_preview": text[:preview_cap]
+                + ("…" if len(text) > preview_cap else ""),
             }
         )
         if used >= max_chars:

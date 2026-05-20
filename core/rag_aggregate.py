@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""RAG 章级聚合：大 pool chunk 检索 → 章级打分去重 → 多命中用整章（方案 B）。"""
+"""RAG 章级聚合：大 pool chunk 检索 → 章级打分去重 → 摘要/整章/chunk 上下文。"""
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from es2vec.core.chapter_enrich import fetch_chapters_from_index
-from es2vec.core.config import CHAPTER_ID_FIELD
+from es2vec.core.chapter_enrich import (
+    fetch_chapter_summaries_from_index,
+    fetch_chapters_from_index,
+)
+from es2vec.core.config import CHAPTER_ID_FIELD, rag_use_chapter_summary
 
-RagContextKind = Literal["chapter", "chunk"]
+RagContextKind = Literal["chapter", "chunk", "chapter_summary"]
 
 
 @dataclass(frozen=True)
@@ -102,15 +105,24 @@ def aggregate_hits_for_rag(
     chapter_k: int,
     multi_hit_threshold: int,
     score_alpha: float,
+    use_chapter_summary: bool | None = None,
 ) -> list[RagContextUnit]:
     """
     将 chunk 级 hits 聚合为最多 ``chapter_k`` 条上下文单元。
 
-    方案 B：同章 ``hit_count >= multi_hit_threshold`` 时用整章 ``full_text``；
-    否则用该章最高分单 chunk。无 ``chapter_id`` 时走兼容路径。
+    优先级（``use_chapter_summary`` 默认读 ``ES2VEC_RAG_USE_CHAPTER_SUMMARY``）：
+    1. 索引中有 ``chapter_summary`` → 用摘要作 ``text``
+    2. 同章命中数 ≥ ``multi_hit_threshold`` → 用 ES 拼接整章
+    3. 否则用该章最高分单 chunk
     """
     if chapter_k <= 0:
         return []
+
+    prefer_summary = (
+        rag_use_chapter_summary()
+        if use_chapter_summary is None
+        else use_chapter_summary
+    )
 
     valid = [h for h in hits if isinstance(h, dict)]
     if not valid:
@@ -137,8 +149,15 @@ def aggregate_hits_for_rag(
     scored.sort(key=lambda x: x[1], reverse=True)
     top_chapters = scored[:chapter_k]
 
+    top_ids = [cid for cid, _, _ in top_chapters]
+    summaries_map: dict[str, dict[str, Any]] = {}
+    if prefer_summary and top_ids:
+        summaries_map = fetch_chapter_summaries_from_index(es, index, top_ids)
+
     full_chapter_ids: list[str] = []
     for cid, _, group in top_chapters:
+        if cid in summaries_map:
+            continue
         if len(group) >= multi_hit_threshold:
             full_chapter_ids.append(cid)
 
@@ -150,6 +169,25 @@ def aggregate_hits_for_rag(
     for cid, ch_score, group in top_chapters:
         hit_count = len(group)
         best = max(group, key=_hit_score)
+        rank_val = best.get("rank") if isinstance(best.get("rank"), int) else None
+
+        sm = summaries_map.get(cid)
+        if sm and str(sm.get("summary") or "").strip():
+            units.append(
+                RagContextUnit(
+                    kind="chapter_summary",
+                    text=str(sm["summary"]).strip(),
+                    chapter_id=cid,
+                    title=str(sm.get("title") or "").strip() or None,
+                    score=ch_score,
+                    hit_count=hit_count,
+                    rank=rank_val,
+                    chunk_index=None,
+                    id=None,
+                )
+            )
+            continue
+
         use_full = hit_count >= multi_hit_threshold
         if use_full:
             ch = chapters_map.get(cid) or {}
@@ -163,7 +201,7 @@ def aggregate_hits_for_rag(
                         title=str(ch.get("title") or "").strip() or None,
                         score=ch_score,
                         hit_count=hit_count,
-                        rank=best.get("rank") if isinstance(best.get("rank"), int) else None,
+                        rank=rank_val,
                         chunk_index=None,
                         id=None,
                     )

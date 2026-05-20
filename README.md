@@ -85,6 +85,23 @@ python examples/three_kingdoms_ext/chunk_corpus.py `
   --output examples/three_kingdoms_ext/out/three_kingdoms_chunks.jsonl
 ```
 
+**方案 A：同索引章回摘要**（按回离线摘要，与 chunk 写入同一索引；检索仅命中 `doc_kind=chunk`，RAG 优先用摘要）：
+
+```powershell
+# 1) 离线生成每回摘要（需 DASHSCOPE_API_KEY，约 120 次 Chat）
+python examples/three_kingdoms_ext/summarize_chapters.py `
+  --input examples/data/three_kingdoms_by_chapter.jsonl `
+  --output examples/three_kingdoms_ext/out/chapter_summaries.jsonl `
+  --skip-existing
+
+# 2) 建索引：chunk + 摘要（切换 mapping 须 --recreate）
+python cli/index_corpus.py `
+  --input examples/three_kingdoms_ext/out/three_kingdoms_chunks.jsonl `
+  --merge-chapter-summaries examples/three_kingdoms_ext/out/chapter_summaries.jsonl `
+  --index es2vec_corpus_chunks --chunk-fields `
+  --use-openai-compatible-embedding --recreate
+```
+
 ### 3. 本地模型建索引（384 维，默认）
 
 ```powershell
@@ -210,7 +227,7 @@ python cli/rag_chat.py --q "草船借箭是谁向曹操借的箭？" --index es2
 
 流程：**混合检索（`fetch_k` chunk 池）** → **章级聚合**（同章多命中可拉整章）→ 拼参考资料 → **对话模型生成**。
 
-**章级聚合（方案 B）**：须使用带 `chapter_id` / `chunk_index` 的 chunk 索引（`index_corpus --chunk-fields`）。ES 先取 `ES2VEC_RAG_FETCH_K`（默认 20）条 chunk，按章打分去重后保留 `ES2VEC_RAG_TOP_K`（默认 3）条参考资料；若某章命中 chunk 数 ≥ `ES2VEC_RAG_MULTI_HIT_THRESHOLD`（默认 2），则送入 LLM 的为整章正文而非多个重复片段。
+**章级聚合（方案 B）**：须使用带 `chapter_id` / `chunk_index` 的 chunk 索引（`index_corpus --chunk-fields`）。ES 先取 `ES2VEC_RAG_FETCH_K`（默认 20）条 **chunk**（自动排除 `doc_kind=chapter_summary`），按章打分去重后保留 `ES2VEC_RAG_TOP_K`（默认 3）条参考资料。送入 LLM 的优先级：索引中有 **章回摘要**（`ES2VEC_RAG_USE_CHAPTER_SUMMARY=1`，默认开启）→ 否则同章多命中 ≥ `ES2VEC_RAG_MULTI_HIT_THRESHOLD`（默认 2）时用整章 → 否则用单 chunk。页面引用区仍展示 ES 整章原文。
 
 ### qwen3-vl-embedding 维度说明
 
@@ -376,7 +393,8 @@ es2vec/
 | `openai_compatible_embedder.py` | 百炼/魔搭 `/v1/embeddings`，支持 `dimensions` 参数 |
 | `search_service.py` | 统一混合检索（REST / gRPC 复用） |
 | `search_rerank.py` | 人名密度二阶段重排 |
-| `rag_aggregate.py` | RAG 章级聚合（多命中整章 / 单 chunk fallback） |
+| `rag_aggregate.py` | RAG 章级聚合（章摘要 / 整章 / 单 chunk） |
+| `doc_kind_filter.py` | 检索仅 chunk、摘要查询过滤 |
 | `rag_service.py` | RAG 编排（检索 → 章级聚合 → Chat） |
 
 ### cli/
@@ -433,6 +451,7 @@ Proto：`proto/es2vec_search.proto`
 | `data/three_kingdoms_by_chapter.jsonl` | 章级 JSONL |
 | `data/synonyms_example.txt` | 同义词样例 |
 | `three_kingdoms_ext/chunk_corpus.py` | 章 → chunk |
+| `three_kingdoms_ext/summarize_chapters.py` | 按回离线摘要 → `chapter_summaries.jsonl` |
 | `three_kingdoms_ext/out/sample_chunks.jsonl` | 快速试跑用 chunk |
 
 ---
@@ -477,6 +496,7 @@ Proto：`proto/es2vec_search.proto`
 | `ES2VEC_RAG_TOP_K` | 章级去重后送入 LLM 的参考资料条数，默认 `3` |
 | `ES2VEC_RAG_FETCH_K` | ES 检索 chunk 池大小，默认 `20` |
 | `ES2VEC_RAG_MULTI_HIT_THRESHOLD` | 同章多命中用整章阈值，默认 `2` |
+| `ES2VEC_RAG_USE_CHAPTER_SUMMARY` | RAG 优先用索引 `chapter_summary`，默认 `1` |
 | `ES2VEC_RAG_CHAPTER_SCORE_ALPHA` | 章级分数命中数 boost，默认 `0.3` |
 | `ES2VEC_RAG_MAX_TOKENS` | 生成 token 上限，默认 `1024`（与向量维度无关） |
 | `HF_ENDPOINT` | Hugging Face 镜像，如 `https://hf-mirror.com` |

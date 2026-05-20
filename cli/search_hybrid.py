@@ -104,6 +104,7 @@ from es2vec.core.config import (
     env_int,
     resolve_name_rerank,
 )
+from es2vec.core.doc_kind_filter import es_filter_chunks_only
 from es2vec.core.search_rerank import apply_name_rerank_to_search_body
 from es2vec.core.inference_utils import infer_text_embeddings
 from es2vec.core.local_embedder import LocalEmbedder, get_local_embedder
@@ -124,12 +125,14 @@ def build_rrf_retriever(
     rank_window_size: int = 50,
     rank_constant: int = 60,
 ) -> dict[str, Any]:
-    """构造 RRF retriever：standard match + knn。"""
+    """构造 RRF retriever：standard match + knn（仅 chunk 文档）。"""
+    chunk_filter = es_filter_chunks_only()
     knn: dict[str, Any] = {
         "field": vector_field,
         "query_vector": query_vector,
         "k": k,
         "num_candidates": num_candidates,
+        "filter": chunk_filter,
     }
     standard_query = {
         "query": {
@@ -143,6 +146,7 @@ def build_rrf_retriever(
                         }
                     }
                 ],
+                "filter": [chunk_filter],
             }
         }
     }
@@ -225,7 +229,10 @@ def build_weighted_hybrid_query(
         raise ValueError("kw_log_cap 必须为正数（log1p 归一除数）")
     inner: dict[str, Any] = {
         "bool": {
-            "filter": [{"exists": {"field": vector_field}}],
+            "filter": [
+                {"exists": {"field": vector_field}},
+                es_filter_chunks_only(),
+            ],
             "should": [
                 {
                     "match": {
