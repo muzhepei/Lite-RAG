@@ -67,6 +67,35 @@ def get_es() -> Elasticsearch:
     return Elasticsearch(**kwargs)
 
 
+def get_index_vector_dims(
+    es: Elasticsearch,
+    index: str,
+    *,
+    vector_field: str = "vector",
+) -> int | None:
+    """
+    读取索引 ``dense_vector`` 字段的 ``dims``；索引不存在或无该字段时返回 ``None``。
+    """
+    if not es.indices.exists(index=index):
+        return None
+    mapping = es.indices.get_mapping(index=index)
+    if not isinstance(mapping, dict):
+        return None
+    for _idx_name, body in mapping.items():
+        if not isinstance(body, dict):
+            continue
+        props = (body.get("mappings") or {}).get("properties") or {}
+        if not isinstance(props, dict):
+            continue
+        field_spec = props.get(vector_field)
+        if not isinstance(field_spec, dict):
+            continue
+        dims = field_spec.get("dims")
+        if isinstance(dims, int) and dims > 0:
+            return dims
+    return None
+
+
 def ensure_index(
     es: Elasticsearch,
     name: str,

@@ -2,16 +2,19 @@
 """
 OpenAI 兼容 Embeddings API（自建网关、DashScope compatible-mode 等）。
 
-与 ``LocalEmbedder`` 对齐的对外接口：``embedding_dim``、``encode_passages``、
-``encode_queries``（当前实现二者均调用同一 endpoint，便于 Qwen3 等模型在网关侧统一处理）。
+``qwen3-vl-embedding`` 由 ``get_openai_compatible_embedder`` 自动路由至
+``DashScopeMultimodalEmbedder``（原生 multimodal-embedding）。
 
-连接参数默认值见 ``es2vec.config``（仅设 ``DASHSCOPE_API_KEY`` 时会自动改走百炼 compatible-mode；魔搭网关需 ``MODELSCOPE_API_KEY`` 等）。
+与 ``LocalEmbedder`` 对齐的对外接口：``embedding_dim``、``encode_passages``、
+``encode_queries``。
+
+连接参数默认值见 ``es2vec.core.config``。
 """
 from __future__ import annotations
 
-import math
+import os
 import time
-from typing import Any, Sequence
+from typing import Any, Sequence, Union
 
 from es2vec.core.config import (
     DASHSCOPE_API_KEY,
@@ -20,37 +23,14 @@ from es2vec.core.config import (
     OPENAI_COMPATIBLE_EMBEDDING_MODEL,
     OPENAI_EMBEDDING_DIMS,
     normalize_openai_compatible_api_key,
+    should_use_dashscope_multimodal_embedding,
 )
-
-
-def _l2_normalize(vec: list[float]) -> list[float]:
-    """L2 归一化，与 ES dense_vector cosine 常见假设对齐。"""
-    if not vec:
-        return vec
-    s = math.sqrt(sum(x * x for x in vec))
-    if s <= 0.0:
-        return vec
-    inv = 1.0 / s
-    return [float(x * inv) for x in vec]
-
-
-def _merge_embedding_batches(
-    inputs: list[str],
-    data_objects: Sequence[Any],
-) -> list[list[float]]:
-    """按 ``index`` 将多批 ``embedding`` 合并为与 ``inputs`` 同序的矩阵行。"""
-    n = len(inputs)
-    rows: list[list[float] | None] = [None] * n
-    for obj in data_objects:
-        idx = int(obj.index)
-        emb = list(obj.embedding)
-        if not (0 <= idx < n):
-            raise RuntimeError(f"embedding 响应 index={idx} 超出批次长度 {n}")
-        rows[idx] = emb
-    missing = [i for i, r in enumerate(rows) if r is None]
-    if missing:
-        raise RuntimeError(f"embedding 响应缺少 index: {missing[:10]}...")
-    return [r for r in rows if r is not None]  # type: ignore[return-value]
+from es2vec.core.dashscope_multimodal_embedder import (
+    DashScopeMultimodalEmbedder,
+    clear_dashscope_multimodal_embedder_cache,
+    get_dashscope_multimodal_embedder,
+)
+from es2vec.core.embedding_utils import l2_normalize, merge_embedding_indexed_rows
 
 
 class OpenAICompatibleEmbedder:
@@ -82,15 +62,14 @@ class OpenAICompatibleEmbedder:
             )
         if not m:
             raise RuntimeError(
-                "OpenAI 兼容向量：model 为空。请设置 OPENAI_COMPATIBLE_EMBEDDING_MODEL "
+                "OpenAI 兼容向量：model 为空。请设置 ES2VEC_DASHSCOPE_EMBEDDING_MODEL（百炼）"
                 "或 ES2VEC_OPENAI_EMBEDDING_MODEL / CLI --openai-embedding-model。"
             )
         self._base_url = b.rstrip("/")
         self._api_key = k
         self._model = m
-        self._dims_hint = int(dims_hint) if dims_hint and dims_hint > 0 else 0
-        self._cached_dim: int | None = self._dims_hint or None
-        # 百炼 compatible-mode embeddings 单次 input 条数上限（默认 10），见 ES2VEC_DASHSCOPE_EMBEDDING_BATCH_MAX
+        self._embedding_dimensions = int(dims_hint) if dims_hint and dims_hint > 0 else 0
+        self._cached_dim: int | None = self._embedding_dimensions or None
         _bu = self._base_url.lower()
         if "dashscope.aliyuncs.com" in _bu or "dashscope-intl.aliyuncs.com" in _bu:
             self._embed_inputs_cap = max(1, int(DASHSCOPE_EMBEDDING_MAX_BATCH))
@@ -103,7 +82,6 @@ class OpenAICompatibleEmbedder:
 
     @property
     def embedding_dim(self) -> int:
-        """向量维度；未缓存时发一次极小请求探测。"""
         if self._cached_dim is not None:
             return int(self._cached_dim)
         row = self._embed_batch(["."])[0]
@@ -111,19 +89,21 @@ class OpenAICompatibleEmbedder:
         return int(self._cached_dim)
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """单次 API；含简单重试。"""
         if not texts:
             return []
         last_err: Exception | None = None
         for attempt in range(3):
             try:
-                resp = self._client.embeddings.create(
-                    model=self._model,
-                    input=texts,
-                )
-                raw = _merge_embedding_batches(texts, resp.data)
-                return [_l2_normalize(r) for r in raw]
-            except Exception as exc:  # noqa: BLE001 — 网关错误类型不定
+                create_kwargs: dict[str, Any] = {
+                    "model": self._model,
+                    "input": texts,
+                }
+                if self._embedding_dimensions > 0:
+                    create_kwargs["dimensions"] = self._embedding_dimensions
+                resp = self._client.embeddings.create(**create_kwargs)
+                raw = merge_embedding_indexed_rows(len(texts), resp.data)
+                return [l2_normalize(r) for r in raw]
+            except Exception as exc:  # noqa: BLE001
                 from openai import AuthenticationError
 
                 if isinstance(exc, AuthenticationError):
@@ -183,7 +163,7 @@ class OpenAICompatibleEmbedder:
         batch_size: int = 32,
         show_progress_bar: bool = False,
     ) -> list[list[float]]:
-        del show_progress_bar  # 与 LocalEmbedder 签名对齐，API 路径无进度条
+        del show_progress_bar
         return self._encode_chunked(texts, batch_size=batch_size)
 
     def encode_queries(
@@ -197,11 +177,26 @@ class OpenAICompatibleEmbedder:
         return self._encode_chunked(texts, batch_size=batch_size)
 
 
+ApiEmbedder = Union[OpenAICompatibleEmbedder, DashScopeMultimodalEmbedder]
+
 _cache: dict[str, OpenAICompatibleEmbedder] = {}
 
 
-def _cache_key(base_url: str, api_key: str, model: str) -> str:
-    return f"{base_url.strip().rstrip('/')}\0{api_key.strip()}\0{model.strip()}"
+def _cache_key(base_url: str, api_key: str, model: str, dims: int) -> str:
+    return f"oa\0{base_url.strip().rstrip('/')}\0{api_key.strip()}\0{model.strip()}\0{dims}"
+
+
+def describe_api_embedder_route(model: str) -> str:
+    """供 CLI 打印：当前模型将走的路径。"""
+    if should_use_dashscope_multimodal_embedding(model):
+        from es2vec.core.config import dashscope_multimodal_api_base
+
+        return (
+            f"百炼多模态嵌入: native multimodal-embedding "
+            f"api_base={dashscope_multimodal_api_base()!r} model={model!r}"
+        )
+    b = OPENAI_COMPATIBLE_BASE_URL
+    return f"OpenAI 兼容嵌入: base_url={b!r} model={model!r}"
 
 
 def get_openai_compatible_embedder(
@@ -210,28 +205,47 @@ def get_openai_compatible_embedder(
     api_key: str | None = None,
     model: str | None = None,
     dims_hint: int | None = None,
-) -> OpenAICompatibleEmbedder:
+) -> ApiEmbedder:
     """
-    按连接参数缓存单例，避免重复构造客户端。
+    按连接参数缓存单例；``qwen3-vl-embedding`` 自动走 DashScope 原生多模态 API。
 
-    参数为 None 时使用 ``es2vec.config`` 中模块级默认值。
+    参数为 None 时使用 ``es2vec.core.config`` 中模块级默认值。
     """
     b = (base_url if base_url is not None else OPENAI_COMPATIBLE_BASE_URL).strip()
     k = normalize_openai_compatible_api_key(
         (api_key if api_key is not None else DASHSCOPE_API_KEY).strip()
     )
     m = (model if model is not None else OPENAI_COMPATIBLE_EMBEDDING_MODEL).strip()
-    # ModelScope 推理网关必须带个人 Token；占位符或未设会在服务端 401，此处提前说明
     if "modelscope.cn" in b.lower() and (not k or k == "----"):
+        dashscope_hint = (os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+        extra = ""
+        if dashscope_hint and dashscope_hint != "----":
+            extra = (
+                "\n检测到已设置 DASHSCOPE_API_KEY，但网关仍为魔搭。"
+                "请从 .env 中删除 ES2VEC_OPENAI_BASE_URL（或改为百炼地址），"
+                "并确认 docker compose 已加载 .env（cp .env.example .env）。"
+            )
         raise RuntimeError(
             "当前 base_url 指向 ModelScope 推理 API，需要魔搭个人访问令牌（与百炼 DASHSCOPE_API_KEY 不是同一种密钥）。\n"
             "请设置 MODELSCOPE_API_KEY（或兼容名 API_KEY），在 https://modelscope.cn 个人中心创建 Token；"
-            "值勿加「Bearer 」前缀。若你只有百炼密钥，请删除 ES2VEC_OPENAI_BASE_URL 环境变量（不要指向魔搭），"
-            "程序会在设置了 DASHSCOPE_API_KEY 时自动改用百炼 compatible-mode 网关。\n"
+            "值勿加「Bearer 」前缀。若你只有百炼密钥：\n"
+            "  1) 在项目根目录 cp .env.example .env，写入 DASHSCOPE_API_KEY=sk-...\n"
+            "  2) 不要设置 ES2VEC_OPENAI_BASE_URL 为魔搭地址\n"
+            "  3) 可选 ES2VEC_DASHSCOPE_EMBEDDING_MODEL=qwen3-vl-embedding\n"
+            "  4) 重新 docker compose run ... index_corpus --use-openai-compatible-embedding"
+            f"{extra}\n"
             "也可在 index_corpus / search 上传入 --openai-api-key。勿将密钥写入代码或提交到 Git。"
         )
     dh = dims_hint if dims_hint is not None else OPENAI_EMBEDDING_DIMS
-    key = _cache_key(b, k, m)
+
+    if should_use_dashscope_multimodal_embedding(m):
+        return get_dashscope_multimodal_embedder(
+            api_key=k,
+            model=m,
+            dims_hint=dh,
+        )
+
+    key = _cache_key(b, k, m, dh)
     if key not in _cache:
         _cache[key] = OpenAICompatibleEmbedder(
             base_url=b,
@@ -245,3 +259,4 @@ def get_openai_compatible_embedder(
 def clear_openai_embedder_cache() -> None:
     """测试或切换网关时清空缓存。"""
     _cache.clear()
+    clear_dashscope_multimodal_embedder_cache()

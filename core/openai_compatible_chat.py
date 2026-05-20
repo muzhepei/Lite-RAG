@@ -4,6 +4,7 @@ OpenAI 兼容 Chat Completions API（百炼 compatible-mode、魔搭推理网关
 
 文档: https://platform.openai.com/docs/api-reference/chat/create
 百炼: https://help.aliyun.com/zh/model-studio/developer-reference/compatibility-of-openai-with-dashscope
+深度思考: https://help.aliyun.com/zh/model-studio/deep-thinking
 """
 from __future__ import annotations
 
@@ -16,8 +17,12 @@ from es2vec.core.config import (
     OPENAI_COMPATIBLE_CHAT_MODEL,
     RAG_CHAT_MAX_TOKENS,
     RAG_CHAT_TEMPERATURE,
+    chat_enable_thinking,
     normalize_openai_compatible_api_key,
 )
+
+# 复用 HTTP 连接，避免每次 RAG 新建 OpenAI 客户端
+_CHAT_CLIENT_CACHE: dict[str, OpenAICompatibleChat] = {}
 
 
 class OpenAICompatibleChat:
@@ -31,6 +36,7 @@ class OpenAICompatibleChat:
         model: str,
         temperature: float = RAG_CHAT_TEMPERATURE,
         max_tokens: int = RAG_CHAT_MAX_TOKENS,
+        enable_thinking: bool | None = None,
     ) -> None:
         b = base_url.strip()
         k = normalize_openai_compatible_api_key((api_key or "").strip())
@@ -56,10 +62,32 @@ class OpenAICompatibleChat:
         self._model = m
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._enable_thinking = (
+            chat_enable_thinking() if enable_thinking is None else enable_thinking
+        )
 
     @property
     def model(self) -> str:
         return self._model
+
+    def _completion_kwargs(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        stream: bool,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": list(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": stream,
+        }
+        if "dashscope.aliyuncs.com" in OPENAI_COMPATIBLE_BASE_URL.lower():
+            kwargs["extra_body"] = {"enable_thinking": self._enable_thinking}
+        return kwargs
 
     def complete(
         self,
@@ -73,10 +101,9 @@ class OpenAICompatibleChat:
         mt = self._max_tokens if max_tokens is None else max_tokens
 
         resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=list(messages),
-            temperature=temp,
-            max_tokens=mt,
+            **self._completion_kwargs(
+                messages, temperature=temp, max_tokens=mt, stream=False
+            ),
         )
         choice = resp.choices[0] if resp.choices else None
         if choice is None or choice.message is None:
@@ -96,10 +123,9 @@ class OpenAICompatibleChat:
         mt = self._max_tokens if max_tokens is None else max_tokens
 
         resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=list(messages),
-            temperature=temp,
-            max_tokens=mt,
+            **self._completion_kwargs(
+                messages, temperature=temp, max_tokens=mt, stream=False
+            ),
         )
         choice = resp.choices[0] if resp.choices else None
         text = ""
@@ -121,33 +147,53 @@ class OpenAICompatibleChat:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        yield_reasoning: bool = False,
     ) -> Iterator[str]:
-        """流式生成 assistant 回复，逐块 yield 文本片段。"""
+        """
+        流式生成 assistant 回复，逐块 yield 文本片段。
+
+        Args:
+            yield_reasoning: 为 True 时同时 yield ``reasoning_content``（深度思考链）。
+                默认仅 yield 正文 ``content``，且 ``enable_thinking`` 默认关闭以缩短首字延迟。
+        """
         temp = self._temperature if temperature is None else temperature
         mt = self._max_tokens if max_tokens is None else max_tokens
 
         stream = self._client.chat.completions.create(
-            model=self._model,
-            messages=list(messages),
-            temperature=temp,
-            max_tokens=mt,
-            stream=True,
+            **self._completion_kwargs(
+                messages, temperature=temp, max_tokens=mt, stream=True
+            ),
         )
         for chunk in stream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
-            if delta is None or delta.content is None:
+            if delta is None:
                 continue
-            text = delta.content
-            if text:
-                yield text
+            if yield_reasoning:
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning:
+                    yield reasoning
+            if delta.content:
+                yield delta.content
+
+
+def _chat_cache_key(base_url: str, api_key: str, model: str, enable_thinking: bool) -> str:
+    return (
+        f"chat\0{base_url.strip().rstrip('/')}\0{api_key.strip()}\0"
+        f"{model.strip()}\0{int(enable_thinking)}"
+    )
 
 
 def default_chat_client() -> OpenAICompatibleChat:
-    """按 ``config`` 默认构造对话客户端。"""
-    return OpenAICompatibleChat(
-        base_url=OPENAI_COMPATIBLE_BASE_URL,
-        api_key=API_KEY,
-        model=OPENAI_COMPATIBLE_CHAT_MODEL,
-    )
+    """按 ``config`` 默认构造对话客户端（进程内单例缓存）。"""
+    thinking = chat_enable_thinking()
+    key = _chat_cache_key(OPENAI_COMPATIBLE_BASE_URL, API_KEY, OPENAI_COMPATIBLE_CHAT_MODEL, thinking)
+    if key not in _CHAT_CLIENT_CACHE:
+        _CHAT_CLIENT_CACHE[key] = OpenAICompatibleChat(
+            base_url=OPENAI_COMPATIBLE_BASE_URL,
+            api_key=API_KEY,
+            model=OPENAI_COMPATIBLE_CHAT_MODEL,
+            enable_thinking=thinking,
+        )
+    return _CHAT_CLIENT_CACHE[key]

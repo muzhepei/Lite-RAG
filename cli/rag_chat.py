@@ -37,7 +37,12 @@ def _bootstrap_es2vec_path() -> None:
 
 _bootstrap_es2vec_path()
 
-from es2vec.core.config import DEFAULT_INDEX_NAME, RAG_DEFAULT_TOP_K
+from es2vec.core.config import (
+    DEFAULT_INDEX_NAME,
+    RAG_DEFAULT_TOP_K,
+    RAG_FETCH_K,
+    RAG_MULTI_HIT_THRESHOLD,
+)
 from es2vec.core.rag_service import (
     RagExecutionError,
     RagRequest,
@@ -119,7 +124,24 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="es2vec RAG 问答")
     ap.add_argument("--q", "--query", dest="query", default="", help="单次提问；省略则进入交互")
     ap.add_argument("--index", default=DEFAULT_INDEX_NAME, help="ES 索引名")
-    ap.add_argument("--top-k", type=int, default=RAG_DEFAULT_TOP_K, help="检索条数")
+    ap.add_argument(
+        "--top-k",
+        type=int,
+        default=RAG_DEFAULT_TOP_K,
+        help="章级去重后送入 LLM 的参考资料条数",
+    )
+    ap.add_argument(
+        "--fetch-k",
+        type=int,
+        default=RAG_FETCH_K,
+        help="ES 检索 chunk 池大小（章级聚合前）",
+    )
+    ap.add_argument(
+        "--multi-hit-threshold",
+        type=int,
+        default=RAG_MULTI_HIT_THRESHOLD,
+        help="同章命中 chunk 数≥此值则用整章正文",
+    )
     ap.add_argument("--json", action="store_true", help="输出完整 JSON")
     ap.add_argument(
         "--no-stream",
@@ -129,7 +151,13 @@ def main() -> int:
     args = ap.parse_args()
 
     def ask_once(q: str) -> int:
-        req = RagRequest(query=q, index=args.index, top_k=args.top_k)
+        req = RagRequest(
+            query=q,
+            index=args.index,
+            top_k=args.top_k,
+            fetch_k=args.fetch_k,
+            multi_hit_threshold=args.multi_hit_threshold,
+        )
         try:
             if args.json:
                 if args.no_stream:
@@ -152,7 +180,10 @@ def main() -> int:
         return ask_once(q0)
 
     print("es2vec RAG 交互模式（空行退出）")
-    print(f"索引: {args.index}  top_k: {args.top_k}")
+    print(
+        f"索引: {args.index}  top_k: {args.top_k}  "
+        f"fetch_k: {args.fetch_k}  multi_hit_threshold: {args.multi_hit_threshold}"
+    )
     while True:
         try:
             line = input("\n问> ").strip()

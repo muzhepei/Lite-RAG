@@ -68,6 +68,11 @@ def format_search_response(
             item[CHUNK_INDEX_FIELD] = chunk_index
         items.append(item)
 
+    # 按展示分降序，避免其它环节改动顺序后与 rank/score 不一致
+    items.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
+    for rank, item in enumerate(items, start=1):
+        item["rank"] = rank
+
     returned = len(items)
     total = _extract_total(hits_block, returned)
 

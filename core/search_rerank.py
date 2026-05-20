@@ -55,7 +55,12 @@ def rerank_es_hits(
         scored.append((combined, h))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [h for _, h in scored]
+    out: list[dict[str, Any]] = []
+    for combined, h in scored:
+        # 写回 _score，使 API/前端展示的「相关度」与排序一致
+        h["_score"] = combined
+        out.append(h)
+    return out
 
 
 def apply_name_rerank_to_search_body(

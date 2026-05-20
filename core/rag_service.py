@@ -9,20 +9,26 @@ from pydantic import BaseModel, Field, field_validator
 
 from es2vec.core.config import (
     DEFAULT_INDEX_NAME,
+    RAG_CHAPTER_SCORE_ALPHA,
     RAG_CHAT_MAX_TOKENS,
     RAG_CHAT_TEMPERATURE,
     RAG_DEFAULT_TOP_K,
+    RAG_FETCH_K,
     RAG_MAX_CONTEXT_CHARS,
+    RAG_MULTI_HIT_THRESHOLD,
 )
+from es2vec.core.es_client import get_es
 from es2vec.core.openai_compatible_chat import OpenAICompatibleChat, default_chat_client
+from es2vec.core.rag_aggregate import aggregate_hits_for_rag
 from es2vec.core.rag_prompt import (
     DEFAULT_RAG_SYSTEM_PROMPT,
-    build_context_from_hits,
+    build_context_from_units,
     build_rag_messages,
 )
 from es2vec.core.search_service import (
     SearchExecutionError,
     SearchRequest,
+    SearchResponse,
     execute_hybrid_search,
     search_response_to_dict,
 )
@@ -39,7 +45,25 @@ class RagRequest(BaseModel):
         default=RAG_DEFAULT_TOP_K,
         ge=1,
         le=20,
-        description="检索返回条数（送入 LLM 的片段数上限）",
+        description="章级去重后送入 LLM 的参考资料条数（chapter_k）",
+    )
+    fetch_k: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="ES 检索 chunk 池大小；None 时读 ES2VEC_RAG_FETCH_K",
+    )
+    multi_hit_threshold: int | None = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description="同章命中 chunk 数≥此值则用整章；None 时读 ES2VEC_RAG_MULTI_HIT_THRESHOLD",
+    )
+    chapter_score_alpha: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="章级分数命中数 boost 系数；None 时读 ES2VEC_RAG_CHAPTER_SCORE_ALPHA",
     )
     match_field: str | None = Field(default=None, description="全文 match 字段；None 用环境默认")
     use_rrf: bool | None = Field(default=None, description="是否 RRF 融合")
@@ -75,6 +99,9 @@ class RagSource(BaseModel):
     score: float | None = None
     chapter_id: str | int | None = None
     chunk_index: int | None = None
+    source_kind: Literal["chapter", "chunk"] | None = None
+    chapter_title: str | None = None
+    hit_count: int | None = None
     text_preview: str = ""
 
 
@@ -93,8 +120,32 @@ class RagExecutionError(Exception):
     """RAG 流程失败（检索、LLM 等）。"""
 
 
+def _resolve_fetch_k(req: RagRequest) -> int:
+    return req.fetch_k if req.fetch_k is not None else RAG_FETCH_K
+
+
+def _resolve_multi_hit_threshold(req: RagRequest) -> int:
+    return (
+        req.multi_hit_threshold
+        if req.multi_hit_threshold is not None
+        else RAG_MULTI_HIT_THRESHOLD
+    )
+
+
+def _resolve_chapter_score_alpha(req: RagRequest) -> float:
+    return (
+        req.chapter_score_alpha
+        if req.chapter_score_alpha is not None
+        else RAG_CHAPTER_SCORE_ALPHA
+    )
+
+
 def _search_request_from_rag(req: RagRequest) -> SearchRequest:
-    extra: dict[str, Any] = {"query": req.query, "index": req.index, "k": req.top_k}
+    extra: dict[str, Any] = {
+        "query": req.query,
+        "index": req.index,
+        "k": _resolve_fetch_k(req),
+    }
     if req.match_field and req.match_field.strip():
         extra["match_field"] = req.match_field.strip()
     if req.use_rrf is not None:
@@ -110,6 +161,29 @@ def _search_request_from_rag(req: RagRequest) -> SearchRequest:
     if req.name_rerank is not None:
         extra["name_rerank"] = req.name_rerank
     return SearchRequest(**extra)
+
+
+def _build_rag_context(
+    req: RagRequest,
+    search_resp: SearchResponse,
+) -> tuple[str, list[dict[str, Any]]]:
+    """章级聚合后组装 LLM 参考资料与 sources 元数据。"""
+    hits = [h for h in search_resp.hits if isinstance(h, dict)]
+    max_ctx = (
+        req.max_context_chars
+        if req.max_context_chars is not None
+        else RAG_MAX_CONTEXT_CHARS
+    )
+    es = get_es()
+    units = aggregate_hits_for_rag(
+        hits,
+        es=es,
+        index=req.index,
+        chapter_k=req.top_k,
+        multi_hit_threshold=_resolve_multi_hit_threshold(req),
+        score_alpha=_resolve_chapter_score_alpha(req),
+    )
+    return build_context_from_units(units, max_chars=max_ctx)
 
 
 def execute_rag(
@@ -135,13 +209,7 @@ def execute_rag(
     else:
         search_resp = search_result
 
-    hits = [h for h in search_resp.hits if isinstance(h, dict)]
-    max_ctx = (
-        req.max_context_chars
-        if req.max_context_chars is not None
-        else RAG_MAX_CONTEXT_CHARS
-    )
-    context, source_meta = build_context_from_hits(hits, max_chars=max_ctx)
+    context, source_meta = _build_rag_context(req, search_resp)
 
     if not context.strip():
         return RagResponse(
@@ -209,13 +277,7 @@ def execute_rag_stream(
     except SearchExecutionError as exc:
         raise RagExecutionError(f"检索失败: {exc}") from exc
 
-    hits = [h for h in search_resp.hits if isinstance(h, dict)]
-    max_ctx = (
-        req.max_context_chars
-        if req.max_context_chars is not None
-        else RAG_MAX_CONTEXT_CHARS
-    )
-    context, source_meta = build_context_from_hits(hits, max_chars=max_ctx)
+    context, source_meta = _build_rag_context(req, search_resp)
 
     client = chat or default_chat_client()
 

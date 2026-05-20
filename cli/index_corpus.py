@@ -81,8 +81,10 @@ from es2vec.core.config import (
 )
 from es2vec.core.inference_utils import cluster_has_smartcn, infer_text_embeddings
 from es2vec.core.local_embedder import get_local_embedder
+from es2vec.core.config import should_use_dashscope_multimodal_embedding
 from es2vec.core.openai_compatible_embedder import (
-    OpenAICompatibleEmbedder,
+    ApiEmbedder,
+    describe_api_embedder_route,
     get_openai_compatible_embedder,
 )
 from es2vec.core.synonym_api import (
@@ -333,7 +335,7 @@ def main() -> None:
     model_name = args.local_model.strip() or None
 
     embedder: Any | None = None
-    openai_embedder: OpenAICompatibleEmbedder | None = None
+    openai_embedder: ApiEmbedder | None = None
 
     if args.use_es_inference:
         first_text = docs[0].text
@@ -352,14 +354,15 @@ def main() -> None:
             t = (s or "").strip()
             return t if t else None
 
-        _eff_base = _cli(args.openai_base_url) or OPENAI_COMPATIBLE_BASE_URL
         _eff_model = _cli(args.openai_embedding_model) or OPENAI_COMPATIBLE_EMBEDDING_MODEL
-        _auto_hint = "（已根据 DASHSCOPE_API_KEY 自动切换百炼 compatible-mode）" if (
-            OPENAI_EMBEDDING_ROUTE_AUTO_TO_DASHSCOPE and not _cli(args.openai_base_url)
-        ) else ""
-        print(
-            f"OpenAI 兼容嵌入: base_url={_eff_base!r} model={_eff_model!r}{_auto_hint}"
-        )
+        _route_msg = describe_api_embedder_route(_eff_model)
+        if (
+            OPENAI_EMBEDDING_ROUTE_AUTO_TO_DASHSCOPE
+            and not _cli(args.openai_base_url)
+            and not should_use_dashscope_multimodal_embedding(_eff_model)
+        ):
+            _route_msg += "（已根据 DASHSCOPE_API_KEY 自动切换百炼 compatible-mode）"
+        print(_route_msg)
 
         openai_embedder = get_openai_compatible_embedder(
             base_url=_cli(args.openai_base_url),

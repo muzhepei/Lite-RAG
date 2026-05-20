@@ -60,7 +60,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from es2vec.core.config import DEFAULT_INDEX_NAME, RAG_DEFAULT_TOP_K, TEXT_TOKEN_FIELD
+from es2vec.core.config import (
+    DEFAULT_INDEX_NAME,
+    RAG_DEFAULT_TOP_K,
+    RAG_FETCH_K,
+    RAG_MULTI_HIT_THRESHOLD,
+    TEXT_TOKEN_FIELD,
+)
 from es2vec.core.rag_service import (
     RagExecutionError,
     RagRequest,
@@ -145,12 +151,17 @@ def api_search_legacy(
         default="",
         description=f"全文 match 字段，jieba 索引时一般为 {TEXT_TOKEN_FIELD}",
     ),
+    include_chapter: bool = Query(
+        default=True,
+        description="附加整章 title/full_text（按 chapter_id 聚合）",
+    ),
 ) -> dict[str, Any]:
     """执行混合检索（兼容旧版 GET 接口）。"""
     req = SearchRequest(
         query=q,
         index=index,
         k=k,
+        include_chapter=include_chapter,
         **({"match_field": match_field} if match_field.strip() else {}),
     )
     return _run_search(req)
@@ -168,9 +179,10 @@ def api_search_v1_get(
     kw_sat: float | None = Query(default=None),
     keyword_norm_mode: str | None = Query(default=None),
     name_rerank: bool | None = Query(default=None),
+    include_chapter: bool = Query(default=True),
 ) -> dict[str, Any]:
     """v1 混合检索（GET，参数与 POST body 一致）。"""
-    extra: dict[str, Any] = {}
+    extra: dict[str, Any] = {"include_chapter": include_chapter}
     if match_field.strip():
         extra["match_field"] = match_field.strip()
     if keyword_norm_mode and keyword_norm_mode in ("raw", "saturation", "log1p"):
@@ -211,12 +223,35 @@ def api_rag_v1_post(
 def api_rag_v1_get(
     query: str = Query(..., min_length=1, alias="q"),
     index: str = Query(default=DEFAULT_INDEX_NAME),
-    top_k: int = Query(default=RAG_DEFAULT_TOP_K, ge=1, le=20),
+    top_k: int = Query(
+        default=RAG_DEFAULT_TOP_K,
+        ge=1,
+        le=20,
+        description="章级去重后送入 LLM 的参考资料条数",
+    ),
+    fetch_k: int = Query(
+        default=RAG_FETCH_K,
+        ge=1,
+        le=100,
+        description="ES 检索 chunk 池大小",
+    ),
+    multi_hit_threshold: int = Query(
+        default=RAG_MULTI_HIT_THRESHOLD,
+        ge=1,
+        le=20,
+        description="同章命中 chunk 数≥此值则用整章正文",
+    ),
     debug: bool = Query(default=False),
     stream: bool = Query(default=True, description="为 true 时 SSE 流式返回生成内容"),
 ) -> StreamingResponse | dict[str, Any]:
     """RAG 问答（GET，参数子集）。"""
-    req = RagRequest(query=query, index=index, top_k=top_k)
+    req = RagRequest(
+        query=query,
+        index=index,
+        top_k=top_k,
+        fetch_k=fetch_k,
+        multi_hit_threshold=multi_hit_threshold,
+    )
     if stream:
         return _run_rag_stream(req, debug=debug)
     return _run_rag(req, debug=debug)

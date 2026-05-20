@@ -72,7 +72,7 @@ from es2vec.core.config import (
 )
 from es2vec.core.local_embedder import get_local_embedder
 from es2vec.core.openai_compatible_embedder import (
-    OpenAICompatibleEmbedder,
+    ApiEmbedder,
     get_openai_compatible_embedder,
 )
 from es2vec.core.synonym_api import build_index_settings_with_synonyms
@@ -206,7 +206,7 @@ def main() -> None:
     _ = text_idx, text_search
 
     embedder: Any | None = None
-    openai_embedder: OpenAICompatibleEmbedder | None = None
+    openai_embedder: ApiEmbedder | None = None
 
     if args.use_es_inference:
         first_text = rows[0][1]

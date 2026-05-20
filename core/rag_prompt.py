@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from es2vec.core.rag_aggregate import RagContextUnit
+
 DEFAULT_RAG_SYSTEM_PROMPT = """你是基于《三国演义》语料库的问答助手。请仅根据用户提供的「参考资料」回答问题。
 若资料不足以回答，请明确说明「资料中未找到相关信息」，不要编造情节或人物关系。
 回答请使用中文，条理清晰；在引用原文依据时，可在句末用 [编号] 标注来源（编号对应参考资料中的 [1]、[2] 等）。"""
@@ -60,6 +62,68 @@ def build_context_from_hits(
                 "score": h.get("score"),
                 "chapter_id": chapter_id,
                 "chunk_index": chunk_index,
+                "text_preview": text[:240] + ("…" if len(text) > 240 else ""),
+            }
+        )
+        if used >= max_chars:
+            break
+
+    return "\n".join(parts).strip(), sources
+
+
+def build_context_from_units(
+    units: list[RagContextUnit],
+    *,
+    max_chars: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    """
+    将章级聚合后的上下文单元格式化为带编号的参考资料块。
+
+    Returns:
+        (context_text, sources) — sources 含 source_kind、chapter_title、hit_count。
+    """
+    if max_chars <= 0:
+        return "", []
+
+    parts: list[str] = []
+    sources: list[dict[str, Any]] = []
+    used = 0
+
+    for i, u in enumerate(units, start=1):
+        text = u.text.strip()
+        if not text:
+            continue
+
+        header_bits: list[str] = [f"[{i}]"]
+        if u.chapter_id is not None:
+            header_bits.append(f"chapter_id={u.chapter_id}")
+        if u.kind == "chapter" and u.title:
+            header_bits.append(f"title={u.title}")
+        if u.kind == "chunk" and u.chunk_index is not None:
+            header_bits.append(f"chunk={u.chunk_index}")
+        if u.id is not None:
+            header_bits.append(f"id={u.id}")
+
+        block = f"{' '.join(header_bits)}\n{text}\n"
+        if used + len(block) > max_chars:
+            remain = max_chars - used
+            if remain < 80:
+                break
+            block = block[:remain] + "\n…（片段已截断）\n"
+
+        parts.append(block)
+        used += len(block)
+        sources.append(
+            {
+                "ref": i,
+                "id": u.id,
+                "rank": u.rank,
+                "score": u.score,
+                "chapter_id": u.chapter_id,
+                "chunk_index": u.chunk_index,
+                "source_kind": u.kind,
+                "chapter_title": u.title,
+                "hit_count": u.hit_count,
                 "text_preview": text[:240] + ("…" if len(text) > 240 else ""),
             }
         )

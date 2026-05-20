@@ -14,9 +14,15 @@ from es2vec.core.config import (
     WEB_HYBRID_KW_SAT,
     WEB_HYBRID_KW_WEIGHT,
     WEB_HYBRID_VEC_WEIGHT,
+    env_flag_true,
     env_float,
 )
 from es2vec.core.es_client import get_es
+from es2vec.core.chapter_enrich import (
+    enrich_hits_with_chapters,
+    fetch_chapters_from_index,
+)
+from es2vec.core.config import CHAPTER_ID_FIELD, search_include_chapter_default
 from es2vec.core.search_response import format_search_response
 
 KeywordNormModeLiteral = Literal["raw", "saturation", "log1p"]
@@ -69,6 +75,10 @@ class SearchRequest(BaseModel):
         default=None,
         description="密度重排；None 时按查询自动判断",
     )
+    include_chapter: bool | None = Field(
+        default=None,
+        description="为命中附加整章信息（chapter_id 聚合）；None 时读 ES2VEC_SEARCH_INCLUDE_CHAPTER",
+    )
 
     @field_validator("query")
     @classmethod
@@ -87,6 +97,10 @@ class SearchResponse(BaseModel):
     total: int
     returned: int
     hits: list[dict[str, Any]]
+    chapters: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="include_chapter 时按章去重后的完整章节列表",
+    )
 
 
 class SearchExecutionError(Exception):
@@ -130,6 +144,9 @@ def execute_hybrid_search(req: SearchRequest) -> SearchResponse:
             req.query,
             match_field=req.match_field,
             k=req.k,
+            use_openai_compatible_embedding=env_flag_true(
+                "ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING"
+            ),
             use_rrf=use_rrf,
             keyword_norm_mode=kw_norm,
             vector_weight=vec_w,
@@ -150,6 +167,22 @@ def execute_hybrid_search(req: SearchRequest) -> SearchResponse:
         index=req.index,
         text_field=req.match_field,
     )
+    include_chapter = (
+        req.include_chapter
+        if req.include_chapter is not None
+        else search_include_chapter_default()
+    )
+    if include_chapter:
+        chapter_ids: list[str] = []
+        for h in payload.get("hits") or []:
+            if isinstance(h, dict):
+                cid = h.get(CHAPTER_ID_FIELD)
+                if cid is not None:
+                    chapter_ids.append(str(cid))
+        if chapter_ids:
+            chapters = fetch_chapters_from_index(es, req.index, chapter_ids)
+            enrich_hits_with_chapters(payload, chapters)
+
     return SearchResponse.model_validate(payload)
 
 

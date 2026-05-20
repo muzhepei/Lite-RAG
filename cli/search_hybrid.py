@@ -85,7 +85,9 @@ _KEYWORD_NORM_CODE: dict[KeywordNormMode, int] = {
 import sys
 from pathlib import Path
 
-from es2vec.core.es_client import get_es
+from elasticsearch import BadRequestError
+
+from es2vec.core.es_client import get_es, get_index_vector_dims
 from es2vec.core.config import (
     CHAPTER_ID_FIELD,
     CHUNK_INDEX_FIELD,
@@ -106,7 +108,7 @@ from es2vec.core.search_rerank import apply_name_rerank_to_search_body
 from es2vec.core.inference_utils import infer_text_embeddings
 from es2vec.core.local_embedder import LocalEmbedder, get_local_embedder
 from es2vec.core.openai_compatible_embedder import (
-    OpenAICompatibleEmbedder,
+    ApiEmbedder,
     get_openai_compatible_embedder,
 )
 
@@ -254,6 +256,23 @@ def build_weighted_hybrid_query(
     }
 
 
+def _wrap_es_search_error(
+    exc: BadRequestError,
+    *,
+    index: str,
+    query_dims: int,
+) -> Exception:
+    """将 ES script_score / knn 的 runtime error 转为更易排查的提示。"""
+    msg = str(exc).lower()
+    if "runtime error" in msg or "search_phase_execution_exception" in msg:
+        return ValueError(
+            f"Elasticsearch 检索脚本执行失败（常见原因：查询向量维度 {query_dims} 与索引 "
+            f"{index!r} 中 vector 字段不一致，或 match 字段不存在）。"
+            "请执行 GET /{index}/_mapping 核对 vector.dims，并确认建索引与检索使用同一嵌入模型。"
+        )
+    return exc
+
+
 def resolve_query_vector(
     es: Any,
     query: str,
@@ -261,7 +280,7 @@ def resolve_query_vector(
     use_es_inference: bool,
     use_openai_compatible_embedding: bool,
     inference_id: str,
-    embedder: LocalEmbedder | OpenAICompatibleEmbedder | None,
+    embedder: LocalEmbedder | ApiEmbedder | None,
     local_model: str,
     openai_base_url: str = "",
     openai_api_key: str = "",
@@ -295,7 +314,7 @@ def hybrid_search(
     use_es_inference: bool = False,
     use_openai_compatible_embedding: bool = False,
     inference_id: str = DEFAULT_INFERENCE_ID,
-    embedder: LocalEmbedder | OpenAICompatibleEmbedder | None = None,
+    embedder: LocalEmbedder | ApiEmbedder | None = None,
     local_model: str = "",
     openai_base_url: str = "",
     openai_api_key: str = "",
@@ -347,6 +366,22 @@ def hybrid_search(
         openai_api_key=openai_api_key,
         openai_embedding_model=openai_embedding_model,
     )
+    index_dims = get_index_vector_dims(es, index, vector_field=VECTOR_FIELD)
+    if index_dims is not None and len(qv) != index_dims:
+        embed_src = (
+            "OpenAI 兼容 API"
+            if use_openai_compatible_embedding
+            else ("ES Inference" if use_es_inference else "本地 SentenceTransformer")
+        )
+        raise ValueError(
+            f"查询向量维度 {len(qv)} 与索引 {index!r} 中 {VECTOR_FIELD} 字段维度 "
+            f"{index_dims} 不一致（当前嵌入来源：{embed_src}）。"
+            "建索引与检索须使用同一套向量模型；若索引用本地 multilingual-e5-small（384 维），"
+            "检索勿开启 ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING；"
+            "若索引用 --use-openai-compatible-embedding（qwen3-vl-embedding 常见 1024 维，默认 2560），"
+            "检索须设 ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING=1 并配置相同 API/模型，"
+            "或加 --recreate 用当前模型重建索引。"
+        )
     src_fields = [TEXT_FIELD, VECTOR_FIELD, CHAPTER_ID_FIELD, CHUNK_INDEX_FIELD]
     if match_field not in src_fields:
         src_fields.append(match_field)
@@ -363,12 +398,15 @@ def hybrid_search(
             kw_sat=kw_sat_val,
             kw_log_cap=kw_log_cap,
         )
-        resp = es.search(
-            index=index,
-            size=fetch_size,
-            query=weighted_q,
-            source=src_fields,
-        )
+        try:
+            resp = es.search(
+                index=index,
+                size=fetch_size,
+                query=weighted_q,
+                source=src_fields,
+            )
+        except BadRequestError as exc:
+            raise _wrap_es_search_error(exc, index=index, query_dims=len(qv)) from exc
     else:
         retriever = build_rrf_retriever(
             query,
@@ -379,12 +417,15 @@ def hybrid_search(
             rank_window_size=rank_window_size,
             rank_constant=rank_constant,
         )
-        resp = es.search(
-            index=index,
-            size=fetch_size,
-            retriever=retriever,
-            source=src_fields,
-        )
+        try:
+            resp = es.search(
+                index=index,
+                size=fetch_size,
+                retriever=retriever,
+                source=src_fields,
+            )
+        except BadRequestError as exc:
+            raise _wrap_es_search_error(exc, index=index, query_dims=len(qv)) from exc
 
     if do_name_rerank:
         body = resp.body if hasattr(resp, "body") else resp

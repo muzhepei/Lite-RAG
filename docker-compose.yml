@@ -1,4 +1,5 @@
 # es2vec + Elasticsearch 8（单机 / ECS）
+# 8GB 内存推荐：ES_JAVA_OPTS=-Xms1g -Xmx1g（见下方 elasticsearch.environment）
 # 配置：cp .env.example .env 后编辑（见 README「云服务器部署」）
 # 构建：docker compose build
 # 启动 ES：docker compose up -d elasticsearch
@@ -27,8 +28,17 @@ x-es2vec-base: &es2vec-base
     # 国内 ECS 默认走 HF 镜像；海外可设 HF_ENDPOINT=https://huggingface.co
     # https://hf-mirror.com/
     HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+    ES_REQUEST_TIMEOUT: ${ES_REQUEST_TIMEOUT:-120}
+    # 百炼 embedding（须写入项目根 .env；勿设 ES2VEC_OPENAI_BASE_URL 为魔搭地址）
+    DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+    ES2VEC_DASHSCOPE_EMBEDDING_MODEL: ${ES2VEC_DASHSCOPE_EMBEDDING_MODEL:-qwen3-vl-embedding}
+    ES2VEC_EMBEDDING_DIMS: ${ES2VEC_EMBEDDING_DIMS:-1024}
+    ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING: ${ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING:-0}
+    ES2VEC_DASHSCOPE_CHAT_MODEL: ${ES2VEC_DASHSCOPE_CHAT_MODEL:-qwen3.6-plus}
   volumes:
     - hf_cache:/root/.cache/huggingface
+    # 宿主机 examples 与容器同步（chunk 输出、index 输入）
+    - ./examples:/opt/es2vec/examples
   working_dir: /opt/es2vec
 
 services:
@@ -40,7 +50,8 @@ services:
       cluster.name: es2vec-docker
       discovery.type: single-node
       bootstrap.memory_lock: "false"
-      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      # 2GB ECS 可改为 -Xms512m -Xmx512m；8GB 推荐 1g
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS:--Xms1g -Xmx1g}
       xpack.security.enabled: "true"
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-es2vec_dev}
       xpack.security.http.ssl.enabled: "false"
@@ -50,11 +61,7 @@ services:
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -fs -u elastic:${ELASTIC_PASSWORD:-es2vec_dev} http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1",
-        ]
+      test: [ "CMD-SHELL", "curl -fs -u elastic:${ELASTIC_PASSWORD:-es2vec_dev} http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1" ]
       interval: 10s
       timeout: 10s
       retries: 30
@@ -80,9 +87,18 @@ services:
       ES2VEC_WEB_HOST: "0.0.0.0"
       ES2VEC_WEB_PORT: "8765"
       ES2VEC_INDEX: ${ES2VEC_INDEX:-es2vec_corpus_chunks}
-    command: ["python", "apps/web_search_server.py"]
+      ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING: ${ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING:-0}
+      ES2VEC_DASHSCOPE_CHAT_MODEL: ${ES2VEC_DASHSCOPE_CHAT_MODEL:-qwen3.6-plus}
+      ES2VEC_CHAT_ENABLE_THINKING: ${ES2VEC_CHAT_ENABLE_THINKING:-0}
+      ES2VEC_RAG_MAX_TOKENS: ${ES2VEC_RAG_MAX_TOKENS:-512}
+      ES2VEC_RAG_MAX_CONTEXT_CHARS: ${ES2VEC_RAG_MAX_CONTEXT_CHARS:-6000}
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - ./examples:/opt/es2vec/examples
+      - ./apps/static:/opt/es2vec/apps/static:ro
+    command: [ "python", "apps/web_search_server.py" ]
     healthcheck:
-      test: ["CMD-SHELL", "curl -fs http://localhost:8765/api/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -fs http://localhost:8765/api/health || exit 1" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -104,7 +120,8 @@ services:
       ES2VEC_GRPC_HOST: "0.0.0.0"
       ES2VEC_GRPC_PORT: "50051"
       ES2VEC_INDEX: ${ES2VEC_INDEX:-es2vec_corpus_chunks}
-    command: ["python", "apps/grpc_search_server.py"]
+      ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING: ${ES2VEC_USE_OPENAI_COMPATIBLE_EMBEDDING:-0}
+    command: [ "python", "apps/grpc_search_server.py" ]
 
 volumes:
   es_data:

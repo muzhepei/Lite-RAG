@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -16,7 +17,11 @@
       --score: #6ee7b7;
       --error: #f87171;
     }
-    * { box-sizing: border-box; }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
@@ -25,28 +30,36 @@
       color: var(--text);
       line-height: 1.6;
     }
+
     .wrap {
       max-width: 820px;
       margin: 0 auto;
       padding: 2.5rem 1.25rem 4rem;
     }
-    header { margin-bottom: 2rem; }
+
+    header {
+      margin-bottom: 2rem;
+    }
+
     h1 {
       font-size: 1.75rem;
       font-weight: 600;
       margin: 0 0 0.35rem;
       letter-spacing: -0.02em;
     }
+
     .sub {
       color: var(--muted);
       font-size: 0.95rem;
       margin: 0;
     }
+
     .search-box {
       display: flex;
       gap: 0.65rem;
       margin-bottom: 1.5rem;
     }
+
     #query {
       flex: 1;
       padding: 0.85rem 1rem;
@@ -58,11 +71,16 @@
       outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
     }
+
     #query:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(196, 92, 38, 0.28);
     }
-    #query::placeholder { color: var(--muted); }
+
+    #query::placeholder {
+      color: var(--muted);
+    }
+
     button {
       padding: 0.85rem 1.35rem;
       font-size: 1rem;
@@ -75,15 +93,27 @@
       white-space: nowrap;
       transition: background 0.15s;
     }
-    button:hover:not(:disabled) { background: var(--accent-hover); }
-    button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    button:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
     .meta {
       font-size: 0.9rem;
       color: var(--muted);
       margin-bottom: 1rem;
       min-height: 1.4em;
     }
-    .meta strong { color: var(--text); }
+
+    .meta strong {
+      color: var(--text);
+    }
+
     .error {
       padding: 0.85rem 1rem;
       border-radius: 8px;
@@ -93,8 +123,17 @@
       margin-bottom: 1rem;
       display: none;
     }
-    .error.visible { display: block; }
-    .results { list-style: none; padding: 0; margin: 0; }
+
+    .error.visible {
+      display: block;
+    }
+
+    .results {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
     .hit {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -102,6 +141,7 @@
       padding: 1rem 1.15rem;
       margin-bottom: 0.85rem;
     }
+
     .hit-head {
       display: flex;
       align-items: baseline;
@@ -109,6 +149,7 @@
       margin-bottom: 0.5rem;
       flex-wrap: wrap;
     }
+
     .rank {
       font-size: 0.8rem;
       font-weight: 600;
@@ -117,37 +158,83 @@
       padding: 0.15rem 0.5rem;
       border-radius: 6px;
     }
+
     .score {
       font-size: 0.85rem;
       color: var(--score);
       font-variant-numeric: tabular-nums;
     }
+
     .doc-id {
       font-size: 0.75rem;
       color: var(--muted);
       word-break: break-all;
     }
+
     .hit-text {
       margin: 0;
       font-size: 0.95rem;
       white-space: pre-wrap;
       word-break: break-word;
     }
+
+    .chapter-title {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .snippet-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin: 0.65rem 0 0.35rem;
+    }
+
+    .chapter-full {
+      margin-top: 0.5rem;
+    }
+
+    .chapter-full summary {
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: var(--accent);
+    }
+
+    .chapter-full-text {
+      margin: 0.5rem 0 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 24rem;
+      overflow-y: auto;
+      padding-right: 0.25rem;
+    }
+
     .empty {
       text-align: center;
       color: var(--muted);
       padding: 2.5rem 1rem;
     }
-    .loading .results { opacity: 0.5; pointer-events: none; }
+
+    .loading .results {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
     .hints {
       margin: -0.5rem 0 1.25rem;
     }
+
     .hint-group {
       margin-bottom: 0.85rem;
     }
+
     .hint-group:last-child {
       margin-bottom: 0;
     }
+
     .hint-label {
       display: block;
       font-size: 0.75rem;
@@ -157,11 +244,13 @@
       color: var(--muted);
       margin-bottom: 0.45rem;
     }
+
     .hint-row {
       display: flex;
       flex-wrap: wrap;
       gap: 0.5rem;
     }
+
     .hint-btn {
       padding: 0.35rem 0.75rem;
       font-size: 0.85rem;
@@ -172,16 +261,19 @@
       cursor: pointer;
       transition: color 0.15s, border-color 0.15s, background 0.15s;
     }
+
     .hint-btn:hover {
       color: var(--text);
       border-color: var(--accent);
       background: rgba(196, 92, 38, 0.12);
     }
+
     .mode-bar {
       display: flex;
       gap: 0.5rem;
       margin-bottom: 1rem;
     }
+
     .mode-btn {
       padding: 0.45rem 1rem;
       font-size: 0.9rem;
@@ -191,11 +283,13 @@
       color: var(--muted);
       cursor: pointer;
     }
+
     .mode-btn.active {
       color: #fff;
       border-color: var(--accent);
       background: var(--accent);
     }
+
     .answer-box {
       display: none;
       background: var(--surface);
@@ -204,7 +298,11 @@
       padding: 1.1rem 1.2rem;
       margin-bottom: 1.25rem;
     }
-    .answer-box.visible { display: block; }
+
+    .answer-box.visible {
+      display: block;
+    }
+
     .answer-title {
       font-size: 0.8rem;
       font-weight: 600;
@@ -213,6 +311,7 @@
       letter-spacing: 0.06em;
       margin: 0 0 0.6rem;
     }
+
     .answer-text {
       margin: 0;
       white-space: pre-wrap;
@@ -220,6 +319,7 @@
       font-size: 1rem;
       line-height: 1.65;
     }
+
     .sources-mini {
       margin-top: 0.85rem;
       font-size: 0.8rem;
@@ -227,6 +327,7 @@
     }
   </style>
 </head>
+
 <body>
   <div class="wrap">
     <header>
@@ -240,14 +341,7 @@
     </div>
 
     <form class="search-box" id="searchForm" role="search">
-      <input
-        type="search"
-        id="query"
-        name="q"
-        placeholder="输入人物或典故，如：诸葛亮、温酒斩华雄、三顾茅庐"
-        autocomplete="off"
-        required
-      />
+      <input type="search" id="query" name="q" placeholder="输入人物或典故，如：诸葛亮、温酒斩华雄、三顾茅庐" autocomplete="off" required />
       <button type="submit" id="btnSearch">检索</button>
     </form>
 
@@ -257,7 +351,20 @@
       <p class="sources-mini" id="sourcesMini"></p>
     </div>
 
-    <div class="hints" id="hints" aria-label="人物与典故快速检索">
+    <div class="hints" id="ragHints" aria-label="RAG 预设问题" hidden>
+      <div class="hint-group">
+        <span class="hint-label">预设问题</span>
+        <div class="hint-row">
+          <button type="button" class="hint-btn" data-q="桃园三结义是哪三人">桃园三结义是哪三人</button>
+          <button type="button" class="hint-btn" data-q="火烧连营是谁放的火">火烧连营是谁放的火</button>
+          <button type="button" class="hint-btn" data-q="定军山死的最高曹军将领是谁">定军山死的最高曹军将领是谁</button>
+          <button type="button" class="hint-btn" data-q="郭嘉最大的功绩是什么">郭嘉最大的功绩是什么</button>
+          <button type="button" class="hint-btn" data-q="空城计吓退了谁">空城计吓退了谁</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="hints" id="searchHints" aria-label="人物与典故快速检索">
       <div class="hint-group">
         <span class="hint-label">人物</span>
         <div class="hint-row">
@@ -304,6 +411,8 @@
     const sourcesMini = document.getElementById("sourcesMini");
     const modeSearch = document.getElementById("modeSearch");
     const modeRag = document.getElementById("modeRag");
+    const searchHints = document.getElementById("searchHints");
+    const ragHints = document.getElementById("ragHints");
 
     let currentMode = "search";
 
@@ -316,6 +425,8 @@
       input.placeholder = isRag
         ? "输入问题，如：草船借箭是谁出的计？"
         : "输入人物或典故，如：诸葛亮、温酒斩华雄、三顾茅庐";
+      searchHints.hidden = isRag;
+      ragHints.hidden = !isRag;
       if (!isRag) {
         answerBox.classList.remove("visible");
       }
@@ -344,6 +455,7 @@
 
     function renderHits(data) {
       const hits = data.hits || [];
+      const showScore = currentMode === "rag";
       if (hits.length === 0) {
         resultsEl.innerHTML =
           '<li class="empty">演义中未找到相关段落，可换人物名、典故或名场面再试。</li>';
@@ -351,8 +463,16 @@
       }
       resultsEl.innerHTML = hits
         .map((h) => {
+          const ch = h.chapter || {};
+          const title =
+            ch.title ||
+            (ch.chapter_number != null ? `第 ${ch.chapter_number} 回` : "") ||
+            (h.chapter_id ? String(h.chapter_id) : "");
+          const titleHtml = title
+            ? `<p class="chapter-title">${escapeHtml(title)}</p>`
+            : "";
           const extra = [];
-          if (h.chapter_id != null) extra.push(`章节 ${h.chapter_id}`);
+          if (h.chapter_id != null && !ch.title) extra.push(`章节 ${h.chapter_id}`);
           if (h.chunk_index != null) extra.push(`片段 ${h.chunk_index}`);
           const extraHtml = extra.length
             ? `<span class="doc-id">${extra.join(" · ")}</span>`
@@ -360,16 +480,29 @@
           const idHtml = h.id
             ? `<span class="doc-id">${escapeHtml(String(h.id))}</span>`
             : "";
-          const trunc = h.text_truncated ? "（正文已截断）" : "";
+          const trunc = h.text_truncated ? "（命中片段已截断）" : "";
+          const fullText = ch.full_text || "";
+          const chapterFullHtml =
+            fullText.trim() &&
+            `<details class="chapter-full">
+              <summary>展开整章正文（${ch.chunk_count != null ? ch.chunk_count + " 段" : "全文"}）</summary>
+              <p class="chapter-full-text">${escapeHtml(fullText)}</p>
+            </details>`;
+          const scoreHtml = showScore
+            ? `<span class="score">相关度 ${formatScore(h.score)}</span>`
+            : "";
           return `
             <li class="hit">
               <div class="hit-head">
                 <span class="rank">#${h.rank}</span>
-                <span class="score">相关度 ${formatScore(h.score)}</span>
+                ${scoreHtml}
                 ${extraHtml}
                 ${idHtml}
               </div>
+              ${titleHtml}
+              <p class="snippet-label">命中片段</p>
               <p class="hit-text">${escapeHtml(h.text || "")}${trunc}</p>
+              ${chapterFullHtml || ""}
             </li>`;
         })
         .join("");
@@ -392,84 +525,143 @@
       return "请求失败";
     }
 
-    async function consumeRagStream(res) {
-      if (!res.ok) {
-        const ct = res.headers.get("content-type") || "";
-        if (ct.includes("application/json")) {
-          const data = await res.json();
-          throw new Error(parseApiError(data));
-        }
-        throw new Error(`请求失败 (${res.status})`);
+    /** 解析单行 SSE：``data: {...}``（兼容 ``data:{...}``） */
+    function parseSseDataLine(line) {
+      const s = line.trim();
+      if (!s.startsWith("data:")) return null;
+      const payload = s.startsWith("data: ") ? s.slice(6) : s.slice(5).trim();
+      if (!payload) return null;
+      try {
+        return JSON.parse(payload);
+      } catch {
+        return null;
       }
+    }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let fullAnswer = "";
-      let metaData = null;
-      let retrievalData = null;
+    /** 从 SSE 文本中提取并处理所有 ``data:`` 事件（兼容 ``\\r\\n`` 换行） */
+    function processSseChunk(text, handlers) {
+      const normalized = text.replace(/\r\n/g, "\n");
+      const blocks = normalized.split(/\n\n+/);
+      for (const block of blocks) {
+        const lines = block.split("\n");
+        for (const line of lines) {
+          const data = parseSseDataLine(line);
+          if (data) handlers.onEvent(data);
+        }
+      }
+    }
+
+    async function consumeRagStream(res) {
+      const ct = res.headers.get("content-type") || "";
+      const isSse =
+        ct.includes("text/event-stream") || ct.includes("text/plain");
+
+      if (!res.ok) {
+        const text = await res.text();
+        if (isSse || text.trimStart().startsWith("data:")) {
+          let errMsg = "";
+          processSseChunk(text, {
+            onEvent(data) {
+              if (data.event === "error" && data.message) {
+                errMsg = data.message;
+              }
+            },
+          });
+          if (errMsg) throw new Error(errMsg);
+        }
+        if (ct.includes("application/json") && !text.trimStart().startsWith("data:")) {
+          try {
+            const data = JSON.parse(text);
+            throw new Error(parseApiError(data));
+          } catch (e) {
+            if (!(e instanceof SyntaxError)) throw e;
+          }
+        }
+        throw new Error(text.trim() || `请求失败 (${res.status})`);
+      }
 
       answerText.textContent = "";
       answerBox.classList.add("visible");
       meta.textContent = "检索完成，正在生成…";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      let fullAnswer = "";
+      let metaData = null;
+      let retrievalData = null;
+      let sawDone = false;
 
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() || "";
-
-        for (const block of blocks) {
-          const line = block.trim();
-          if (!line.startsWith("data: ")) continue;
-          let data;
-          try {
-            data = JSON.parse(line.slice(6));
-          } catch {
-            continue;
-          }
-
-          if (data.event === "meta") {
-            metaData = data;
-            meta.innerHTML =
-              `RAG「<strong>${escapeHtml(data.query || "")}</strong>」` +
-              ` · 模型 <strong>${escapeHtml(data.model || "—")}</strong>` +
-              ` · 检索 <strong>${data.retrieval_returned ?? "—"}</strong> 段`;
-          } else if (data.event === "retrieval" && data.retrieval) {
-            retrievalData = data.retrieval;
-            renderHits(retrievalData);
-          } else if (data.event === "delta" && data.content) {
-            fullAnswer += data.content;
+      function handleEvent(data) {
+        if (data.event === "meta") {
+          metaData = data;
+          meta.innerHTML =
+            `RAG「<strong>${escapeHtml(data.query || "")}</strong>」` +
+            ` · 模型 <strong>${escapeHtml(data.model || "—")}</strong>` +
+            ` · 检索 <strong>${data.retrieval_returned ?? "—"}</strong> 段`;
+        } else if (data.event === "retrieval" && data.retrieval) {
+          retrievalData = data.retrieval;
+          renderHits(retrievalData);
+        } else if (data.event === "delta" && data.content) {
+          fullAnswer += data.content;
+          answerText.textContent = fullAnswer;
+        } else if (data.event === "done") {
+          sawDone = true;
+          if (data.answer) {
+            fullAnswer = data.answer;
             answerText.textContent = fullAnswer;
-          } else if (data.event === "done") {
-            if (data.answer) {
-              fullAnswer = data.answer;
-              answerText.textContent = fullAnswer;
-            }
-            const src = data.sources || [];
-            sourcesMini.textContent = src.length
-              ? "引用 " +
-                src
-                  .map((s) => `[${s.ref}] ${(s.text_preview || "").slice(0, 40)}…`)
-                  .join(" · ")
-              : "";
-            if (metaData) {
-              meta.innerHTML =
-                `RAG「<strong>${escapeHtml(metaData.query || "")}</strong>」` +
-                ` · 模型 <strong>${escapeHtml(metaData.model || "—")}</strong>` +
-                ` · 检索 <strong>${metaData.retrieval_returned ?? "—"}</strong> 段`;
-            }
-            if (retrievalData) {
-              renderHits(retrievalData);
-            } else if (!resultsEl.children.length) {
-              resultsEl.innerHTML =
-                '<li class="empty">回答已生成；可在 OpenAPI /api/v1/rag?debug=1 查看完整检索列表。</li>';
-            }
-          } else if (data.event === "error") {
-            throw new Error(data.message || "RAG 生成失败");
           }
+          const src = data.sources || [];
+          sourcesMini.textContent = src.length
+            ? "引用 " +
+            src
+              .map((s) => `[${s.ref}] ${(s.text_preview || "").slice(0, 40)}…`)
+              .join(" · ")
+            : "";
+          if (metaData) {
+            meta.innerHTML =
+              `RAG「<strong>${escapeHtml(metaData.query || "")}</strong>」` +
+              ` · 模型 <strong>${escapeHtml(metaData.model || "—")}</strong>` +
+              ` · 检索 <strong>${metaData.retrieval_returned ?? "—"}</strong> 段`;
+          }
+          if (retrievalData) {
+            renderHits(retrievalData);
+          } else if (!resultsEl.children.length) {
+            resultsEl.innerHTML =
+              '<li class="empty">回答已生成；可在 OpenAPI /api/v1/rag?debug=1 查看完整检索列表。</li>';
+          }
+        } else if (data.event === "error") {
+          throw new Error(data.message || "RAG 生成失败");
+        }
+      }
+
+      const body = res.body;
+      if (!body || typeof body.getReader !== "function") {
+        const text = await res.text();
+        processSseChunk(text, { onEvent: handleEvent });
+      } else {
+        const reader = body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const normalized = buffer.replace(/\r\n/g, "\n");
+          const lastSep = normalized.lastIndexOf("\n\n");
+          if (lastSep < 0) continue;
+          const complete = normalized.slice(0, lastSep + 2);
+          buffer = normalized.slice(lastSep + 2);
+          processSseChunk(complete, { onEvent: handleEvent });
+        }
+        if (buffer.trim()) {
+          processSseChunk(buffer, { onEvent: handleEvent });
+        }
+      }
+
+      if (!sawDone) {
+        if (fullAnswer.trim()) {
+          answerText.textContent = fullAnswer;
+          sourcesMini.textContent = "（流式连接提前结束，以上为已生成片段）";
+        } else {
+          throw new Error("RAG 未返回完整结果，请确认已 docker compose build web 并重建容器，且 .env 中 DASHSCOPE_API_KEY 有效");
         }
       }
     }
@@ -488,12 +680,15 @@
         if (currentMode === "rag") {
           const res = await fetch("/api/v1/rag?stream=true&debug=true", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "text/event-stream",
+            },
             body: JSON.stringify({ query: q }),
           });
           await consumeRagStream(res);
         } else {
-          const params = new URLSearchParams({ q, k: "10" });
+          const params = new URLSearchParams({ q, k: "10", include_chapter: "true" });
           const res = await fetch(`/api/search?${params}`);
           const data = await res.json();
           if (!res.ok) throw new Error(parseApiError(data));
@@ -519,14 +714,21 @@
       doSearch(q);
     });
 
-    document.getElementById("hints").addEventListener("click", (e) => {
-      const btn = e.target.closest(".hint-btn");
-      if (!btn) return;
-      const q = btn.getAttribute("data-q");
-      if (!q) return;
-      input.value = q;
-      doSearch(q);
-    });
+    function bindHintClicks(container) {
+      container.addEventListener("click", (e) => {
+        const hintBtn = e.target.closest(".hint-btn");
+        if (!hintBtn) return;
+        const q = hintBtn.getAttribute("data-q");
+        if (!q) return;
+        if (container === ragHints && currentMode !== "rag") {
+          setMode("rag");
+        }
+        input.value = q;
+        doSearch(q);
+      });
+    }
+    bindHintClicks(searchHints);
+    bindHintClicks(ragHints);
 
     const initialQ = new URLSearchParams(location.search).get("q");
     if (initialQ) {
@@ -535,4 +737,5 @@
     }
   </script>
 </body>
+
 </html>
